@@ -34,7 +34,7 @@ import { log } from "@/app.js";
 import { createCommentModerationPropertyObject } from "./moderation.js";
 import { getUserMutePreferences } from "./muteUser.js";
 import type { AxiosInstance } from "axios";
-import { alias } from "drizzle-orm/pg-core";
+import { alias, PgTransaction } from "drizzle-orm/pg-core";
 import * as authUtilService from "@/service/authUtil.js";
 import { castVoteForOpinionSlugId } from "./voting.js";
 import {
@@ -45,6 +45,14 @@ import {
     isSqlWhereRepresentative,
     isSqlOrderByRepresentative,
 } from "@/utils/sqlLogic.js";
+import type { ImportPolisResults } from "@/shared/types/polis.js";
+import type {
+    OpinionContentIdPerOpinionId,
+    OpinionIdPerStatementId,
+    StatementIdPerOpinionSlugId,
+    UserIdPerParticipantId,
+} from "@/utils/dataStructure.js";
+import { nowZeroMs } from "@/shared/common/util.js";
 
 interface GetCommentSlugIdLastCreatedAtProps {
     lastSlugId: string | undefined;
@@ -1325,4 +1333,193 @@ export async function deleteOpinionBySlugId({
         // TODO: delete from Polis as well!
         // don't count votes on deleted opinions => recalculate polis clusters
     });
+}
+
+export async function bulkInsertOpinionsFromExternalPolisConvo({
+    db,
+    importedPolisConversation,
+    conversationId,
+    conversationSlugId,
+    conversationContentId,
+    userIdPerParticipantId,
+}: {
+    db: PostgresJsDatabase;
+    importedPolisConversation: ImportPolisResults;
+    conversationId: number;
+    conversationSlugId: string;
+    conversationContentId: number;
+    userIdPerParticipantId: UserIdPerParticipantId;
+}): Promise<{
+    opinionIdPerStatementId: OpinionIdPerStatementId;
+    opinionContentIdPerOpinionId: OpinionContentIdPerOpinionId;
+}> {
+    const statementIdPerOpinionSlugId: StatementIdPerOpinionSlugId = {};
+    const opinionIdPerStatementId: OpinionIdPerStatementId = {};
+    const opinionContentIdPerOpinionId: OpinionContentIdPerOpinionId = {};
+    const opinionsToAdd = importedPolisConversation.comments_data.map(
+        (comment) => {
+            const opinionSlugId = generateRandomSlugId();
+
+            // !IMPORTANT: this considers there are no duplicates or edit/cancel votes
+            const calculatedNumAgrees =
+                importedPolisConversation.votes_data.filter(
+                    (vote) =>
+                        vote.statement_id == comment.statement_id &&
+                        vote.vote === 1,
+                ).length;
+            const polisNumAgrees = comment.agree_count;
+            if (polisNumAgrees === null) {
+                log.warn(
+                    `comment.agree_count is null while importing conversationSlugId=${conversationSlugId} and opinionSludId=${opinionSlugId}`,
+                );
+            } else if (polisNumAgrees !== calculatedNumAgrees) {
+                log.warn(
+                    `comment.agree_count = ${String(polisNumAgrees)} !== calculated numAgrees = ${String(calculatedNumAgrees)} while importing conversationSlugId=${conversationSlugId} and opinionSludId=${opinionSlugId}`,
+                );
+            }
+
+            const calculatedNumDisagrees =
+                importedPolisConversation.votes_data.filter(
+                    (vote) =>
+                        vote.statement_id == comment.statement_id &&
+                        vote.vote === -1,
+                ).length;
+            const polisNumDisagrees = comment.disagree_count;
+            if (polisNumDisagrees === null) {
+                log.warn(
+                    `comment.disagree_count is null while importing conversationSlugId=${conversationSlugId} and opinionSludId=${opinionSlugId}`,
+                );
+            } else if (polisNumDisagrees !== calculatedNumDisagrees) {
+                log.warn(
+                    `comment.disagree_count = ${String(polisNumDisagrees)} !== calculated numDisagrees = ${String(calculatedNumDisagrees)} while importing conversationSlugId=${conversationSlugId} and opinionSludId=${opinionSlugId}`,
+                );
+            }
+
+            const calculatedNumPasses =
+                importedPolisConversation.votes_data.filter(
+                    (vote) =>
+                        vote.statement_id == comment.statement_id &&
+                        vote.vote === 0,
+                ).length;
+            const polisNumPasses = comment.pass_count;
+            if (polisNumPasses === null) {
+                log.warn(
+                    `comment.pass_count is null while importing conversationSlugId=${conversationSlugId} and opinionSludId=${opinionSlugId}`,
+                );
+            } else if (polisNumPasses !== calculatedNumPasses) {
+                log.warn(
+                    `comment.pass_count = ${String(polisNumPasses)} !== calculated numPasses = ${String(calculatedNumPasses)} while importing conversationSlugId=${conversationSlugId} and opinionSludId=${opinionSlugId}`,
+                );
+            }
+
+            statementIdPerOpinionSlugId[opinionSlugId] = comment.statement_id;
+
+            return {
+                slugId: opinionSlugId,
+                authorId: userIdPerParticipantId[comment.participant_id],
+                currentContentId: null,
+                conversationId: conversationId,
+                isSeed: comment.is_seed ?? false,
+                numAgrees: polisNumAgrees ?? calculatedNumAgrees,
+                numDisagrees: polisNumDisagrees ?? calculatedNumDisagrees,
+                numPasses: polisNumPasses ?? calculatedNumPasses,
+            };
+        },
+    );
+
+    async function doImportOpinions(
+        db: PostgresJsDatabase,
+    ): Promise<{ opinionIdPerStatementId: OpinionIdPerStatementId }> {
+        const insertOpinionResponses = await db
+            .insert(opinionTable)
+            .values(opinionsToAdd)
+            .returning({
+                opinionId: opinionTable.id,
+                opinionSlugId: opinionTable.slugId,
+            });
+        for (const insertedOpinion of insertOpinionResponses) {
+            const statementId =
+                statementIdPerOpinionSlugId[insertedOpinion.opinionSlugId];
+            opinionIdPerStatementId[statementId] = insertedOpinion.opinionId;
+        }
+
+        const opinionContentsToAdd =
+            importedPolisConversation.comments_data.map((comment) => {
+                const opinionId = opinionIdPerStatementId[comment.statement_id];
+                try {
+                    const commentBody = processHtmlBody(comment.txt, true);
+                    return {
+                        opinionId: opinionId,
+                        conversationContentId: conversationContentId,
+                        content: commentBody,
+                    };
+                } catch (error) {
+                    if (error instanceof Error) {
+                        throw httpErrors.badRequest(error.message);
+                    } else {
+                        throw httpErrors.badRequest(
+                            "Error while sanitizing request body",
+                        );
+                    }
+                }
+            });
+        const opinionContentTableResponses = await db
+            .insert(opinionContentTable)
+            .values(opinionContentsToAdd)
+            .returning({
+                opinionContentId: opinionContentTable.id,
+                opinionId: opinionContentTable.opinionId,
+            });
+        for (const opinionContent of opinionContentTableResponses) {
+            opinionContentIdPerOpinionId[opinionContent.opinionId] =
+                opinionContent.opinionContentId;
+        }
+        const sqlChunksOpinionCurrentId: SQL[] = [];
+        sqlChunksOpinionCurrentId.push(sql`(CASE`);
+        for (const opinionContentResponse of opinionContentTableResponses) {
+            sqlChunksOpinionCurrentId.push(
+                sql`WHEN ${opinionTable.id} = ${opinionContentResponse.opinionId}::int THEN ${opinionContentResponse.opinionContentId}::int`,
+            );
+        }
+        sqlChunksOpinionCurrentId.push(sql`ELSE current_content_id`);
+        sqlChunksOpinionCurrentId.push(sql`END)`);
+
+        const finalSqlOpinionCurrentContentId = sql.join(
+            sqlChunksOpinionCurrentId,
+            sql.raw(" "),
+        );
+        const setClauseOpinionCurrentContentId = {
+            currentContentId: finalSqlOpinionCurrentContentId,
+        };
+        await db
+            .update(opinionTable)
+            .set({
+                ...setClauseOpinionCurrentContentId,
+                updatedAt: nowZeroMs(),
+            })
+            .where(eq(opinionTable.conversationId, conversationId));
+
+        // Update the conversation's opinion count
+        await db
+            .update(conversationTable)
+            .set({
+                opinionCount: importedPolisConversation.comments_data.length,
+            })
+            .where(eq(conversationTable.id, conversationId));
+        // Update the user profile's comment count
+        // TODO: do this
+        return { opinionIdPerStatementId, opinionContentIdPerOpinionId };
+    }
+
+    let doTransaction = true;
+    if (db instanceof PgTransaction) {
+        doTransaction = false;
+    }
+    if (doTransaction) {
+        return await db.transaction(async (tx) => {
+            return await doImportOpinions(tx);
+        });
+    } else {
+        return await doImportOpinions(db);
+    }
 }

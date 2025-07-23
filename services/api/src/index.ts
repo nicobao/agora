@@ -1784,7 +1784,7 @@ server.after(() => {
                     },
                 });
 
-            const postResponse = await postService.createNewPost({
+            const { conversationSlugId } = await postService.createNewPost({
                 db: db,
                 conversationTitle: request.body.conversationTitle,
                 conversationBody: request.body.conversationBody ?? null,
@@ -1798,7 +1798,7 @@ server.after(() => {
                 isLoginRequired: request.body.isLoginRequired,
                 seedOpinionList: request.body.seedOpinionList,
             });
-            reply.send(postResponse);
+            reply.send({ conversationSlugId });
             const proofChannel40EventId = config.NOSTR_PROOF_CHANNEL_EVENT_ID;
             if (proofChannel40EventId !== undefined) {
                 try {
@@ -1851,18 +1851,29 @@ server.after(() => {
                 );
             }
 
-            return await postService.importPost({
+            return await postService.importConversation({
                 db: db,
-                pollingOptionList: request.body.pollingOptionList ?? null,
                 authorId: deviceStatus.userId,
                 didWrite: didWrite,
                 proof: encodedUcan,
+                polisUrl: request.body.polisUrl,
                 axiosPolis: axiosPolis,
                 indexConversationAt: request.body.indexConversationAt,
                 postAsOrganization: request.body.postAsOrganization,
                 isIndexed: request.body.isIndexed,
                 isLoginRequired: request.body.isLoginRequired,
-                seedOpinionList: request.body.seedOpinionList,
+                awsAiLabelSummaryEnable:
+                    config.AWS_AI_LABEL_SUMMARY_ENABLE &&
+                    (config.NODE_ENV === "production" ||
+                        config.NODE_ENV === "staging"),
+                awsAiLabelSummaryRegion: config.AWS_AI_LABEL_SUMMARY_REGION,
+                awsAiLabelSummaryModelId: config.AWS_AI_LABEL_SUMMARY_MODEL_ID,
+                awsAiLabelSummaryTemperature:
+                    config.AWS_AI_LABEL_SUMMARY_TEMPERATURE,
+                awsAiLabelSummaryTopP: config.AWS_AI_LABEL_SUMMARY_TOP_P,
+                awsAiLabelSummaryMaxTokens:
+                    config.AWS_AI_LABEL_SUMMARY_MAX_TOKENS,
+                awsAiLabelSummaryPrompt: config.AWS_AI_LABEL_SUMMARY_PROMPT,
             });
         },
     });
