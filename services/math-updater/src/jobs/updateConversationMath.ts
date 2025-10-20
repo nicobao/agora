@@ -9,6 +9,7 @@ import {
     getPolisVotes,
     getAndUpdatePolisMath,
 } from "@/services/polisMathUpdater.js";
+import type { GoogleCloudCredentials } from "@/shared-backend/googleCloudAuth.js";
 import { eq, and } from "drizzle-orm";
 import type PgBoss from "pg-boss";
 import { PostgresJsDatabase } from "drizzle-orm/postgres-js";
@@ -24,6 +25,7 @@ export async function updateConversationMathHandler(
     job: PgBoss.Job<UpdateConversationMathData>,
     db: PostgresJsDatabase,
     axiosPolis: AxiosInstance,
+    googleCloudCredentials?: GoogleCloudCredentials,
 ): Promise<void> {
     const { conversationId, conversationSlugId, mathUpdateRequestedAt } =
         job.data;
@@ -65,6 +67,7 @@ export async function updateConversationMathHandler(
             awsAiLabelSummaryTopP: config.AWS_AI_LABEL_SUMMARY_TOP_P,
             awsAiLabelSummaryMaxTokens: config.AWS_AI_LABEL_SUMMARY_MAX_TOKENS,
             awsAiLabelSummaryPrompt: config.AWS_AI_LABEL_SUMMARY_PROMPT,
+            googleCloudCredentials,
         });
 
         // Clear the needsMathUpdate flag only if mathUpdateRequestedAt hasn't changed

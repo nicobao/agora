@@ -7,7 +7,6 @@
 import type { PolisKey } from "@/shared/types/zod.js";
 import type { AxiosInstance } from "axios";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
-import { PgTransaction } from "drizzle-orm/pg-core";
 import { and, eq, isNotNull, isNull, sql, type SQL } from "drizzle-orm";
 import {
     polisClusterOpinionTable,
@@ -28,7 +27,15 @@ import {
     getUserIdByPolisParticipantIds,
     getConversationContent,
 } from "./polisHelpers.js";
-import { updateAiLabelsAndSummaries } from "./llmService.js";
+import {
+    generateAiLabelsAndSummaries,
+    updateClustersLabelsAndSummaries,
+} from "./llmService.js";
+import {
+    generateAllClusterTranslations,
+    insertClusterTranslations,
+} from "./translationService.js";
+import type { GoogleCloudCredentials } from "@/shared-backend/googleCloudAuth.js";
 import { log } from "@/app.js";
 
 // Helper function for zero-millisecond timestamps
@@ -98,25 +105,37 @@ interface GetAndUpdatePolisMathProps {
     awsAiLabelSummaryTopP: string;
     awsAiLabelSummaryMaxTokens: string;
     awsAiLabelSummaryPrompt: string;
+    googleCloudCredentials?: GoogleCloudCredentials;
 }
 
-interface LoadPolisMathResultsProps {
-    db: PostgresJsDatabase;
-    polisMathResults: MathResults;
-    conversationSlugId: string;
-    conversationId: number;
+// Return type for Phase 1
+interface Phase1Result {
+    clustersInsightsForLlm: Record<string, ClusterInsightsWithOpinionIds>;
+    polisContentId: number;
+    minNumberOfClusters: number;
+    clusterIdsByKey: Record<PolisKey, number>;
+    groupCommentStatsByKey: Record<PolisKey, any[]>;
 }
 
-async function doLoadPolisMathResults({
+/**
+ * Phase 1: Create immutable cluster structure (Transaction)
+ * - Insert polisContent
+ * - Insert polis clusters (get IDs via RETURNING)
+ * - Insert cluster users
+ * - Insert cluster opinions
+ * Returns cluster IDs and data needed for Phase 2 and 3
+ */
+async function phase1CreateClusterStructure({
     db,
     conversationSlugId,
     conversationId,
     polisMathResults,
-}: LoadPolisMathResultsProps): Promise<{
-    clustersInsightsForLlm: Record<string, ClusterInsightsWithOpinionIds>;
-    polisContentId: number;
-    minNumberOfClusters: number;
-}> {
+}: {
+    db: PostgresJsDatabase;
+    conversationSlugId: string;
+    conversationId: number;
+    polisMathResults: MathResults;
+}): Promise<Phase1Result> {
     const polisContentQuery = await db
         .insert(polisContentTable)
         .values({
@@ -125,198 +144,7 @@ async function doLoadPolisMathResults({
         })
         .returning({ polisContentId: polisContentTable.id });
     const polisContentId = polisContentQuery[0].polisContentId;
-    let setClauseCommentPriority = {};
-    let setClauseGroupAwareConsensusAgree = {};
-    let setClauseGroupAwareConsensusDisagree = {};
-    let setClauseCommentExtremities = {};
-    if (Object.keys(polisMathResults.statements_df).length === 0) {
-        log.warn(
-            `[Math] No opinion to update for polisContentId=${String(
-                polisContentId,
-            )} and conversationSlugId=${conversationSlugId}`,
-        );
-    } else {
-        const sqlChunksPriorities: SQL[] = [];
-        sqlChunksPriorities.push(sql`(CASE`);
-        const sqlChunksGroupAwareConsensusAgree: SQL[] = [];
-        sqlChunksGroupAwareConsensusAgree.push(sql`(CASE`);
-        const sqlChunksGroupAwareConsensusDisagree: SQL[] = [];
-        sqlChunksGroupAwareConsensusDisagree.push(sql`(CASE`);
-        const sqlChunksExtremities: SQL[] = [];
-        sqlChunksExtremities.push(sql`(CASE`);
-        for (const {
-            statement_id,
-            priority,
-            "group-aware-consensus-agree": groupAwareConsensusAgree,
-            "group-aware-consensus-disagree": groupAwareConsensusDisagree,
-            extremity,
-        } of polisMathResults.statements_df) {
-            sqlChunksPriorities.push(
-                sql`WHEN ${opinionTable.id} = ${statement_id}::int THEN ${priority}`,
-            );
-            sqlChunksGroupAwareConsensusAgree.push(
-                sql`WHEN ${opinionTable.id} = ${statement_id}::int THEN ${groupAwareConsensusAgree}`,
-            );
-            sqlChunksGroupAwareConsensusDisagree.push(
-                sql`WHEN ${opinionTable.id} = ${statement_id}::int THEN ${groupAwareConsensusDisagree}`,
-            );
-            sqlChunksExtremities.push(
-                sql`WHEN ${opinionTable.id} = ${statement_id}::int THEN ${extremity}`,
-            );
-        }
 
-        sqlChunksPriorities.push(sql`ELSE polis_priority`); // this should not happen
-        sqlChunksPriorities.push(sql`END)`);
-        const finalSqlCommentPriorities = sql.join(
-            sqlChunksPriorities,
-            sql.raw(" "),
-        );
-        setClauseCommentPriority = {
-            polisPriority: finalSqlCommentPriorities,
-        };
-
-        sqlChunksGroupAwareConsensusAgree.push(sql`ELSE polis_ga_consensus_pa`); // this should not happen
-        sqlChunksGroupAwareConsensusAgree.push(sql`END)`);
-        const finalSqlGroupAwareConsensusAgree = sql.join(
-            sqlChunksGroupAwareConsensusAgree,
-            sql.raw(" "),
-        );
-        setClauseGroupAwareConsensusAgree = {
-            polisGroupAwareConsensusProbabilityAgree:
-                finalSqlGroupAwareConsensusAgree,
-        };
-
-        sqlChunksGroupAwareConsensusDisagree.push(
-            sql`ELSE polis_ga_consensus_pd`,
-        ); // this should not happen
-        sqlChunksGroupAwareConsensusDisagree.push(sql`END)`);
-        const finalSqlGroupAwareConsensusDisagree = sql.join(
-            sqlChunksGroupAwareConsensusDisagree,
-            sql.raw(" "),
-        );
-        setClauseGroupAwareConsensusDisagree = {
-            polisGroupAwareConsensusProbabilityDisagree:
-                finalSqlGroupAwareConsensusDisagree,
-        };
-
-        sqlChunksExtremities.push(sql`ELSE polis_divisiveness`); // this should not happen
-        sqlChunksExtremities.push(sql`END)`);
-        const finalSqlCommentExtremities: SQL = sql.join(
-            sqlChunksExtremities,
-            sql.raw(" "),
-        );
-        setClauseCommentExtremities = {
-            polisDivisiveness: finalSqlCommentExtremities,
-        };
-    }
-
-    let setClauseMajorityProbability = {};
-    const sqlChunksMajorityProbability: SQL[] = [];
-    let setClauseMajorityType = {};
-    const sqlChunksMajorityType: SQL[] = [];
-
-    if (polisMathResults.consensus.agree.length === 0) {
-        log.info(
-            `[Math] No majority agree opinions for polisContentId=${String(
-                polisContentId,
-            )} and conversationSlugId=${conversationSlugId}`,
-        );
-    } else {
-        sqlChunksMajorityProbability.push(sql`(CASE`);
-        sqlChunksMajorityType.push(sql`(CASE`);
-        for (const consensusOpinion of polisMathResults.consensus.agree) {
-            sqlChunksMajorityProbability.push(
-                sql`WHEN ${opinionTable.id} = ${consensusOpinion.tid}::int THEN ${consensusOpinion["p-success"]}::real`,
-            );
-            sqlChunksMajorityType.push(
-                sql`WHEN ${opinionTable.id} = ${consensusOpinion.tid}::int THEN 'agree'::vote_enum_simple`,
-            );
-        }
-    }
-    if (polisMathResults.consensus.disagree.length === 0) {
-        log.info(
-            `[Math] No majority disagree opinions for polisContentId=${String(
-                polisContentId,
-            )} and conversationSlugId=${conversationSlugId}`,
-        );
-    } else {
-        if (sqlChunksMajorityProbability.length === 0) {
-            sqlChunksMajorityProbability.push(sql`(CASE`);
-        }
-        if (sqlChunksMajorityType.length === 0) {
-            sqlChunksMajorityType.push(sql`(CASE`);
-        }
-        for (const consensusOpinion of polisMathResults.consensus.disagree) {
-            sqlChunksMajorityProbability.push(
-                sql`WHEN ${opinionTable.id} = ${consensusOpinion.tid}::int THEN ${consensusOpinion["p-success"]}::real`,
-            );
-            sqlChunksMajorityType.push(
-                sql`WHEN ${opinionTable.id} = ${consensusOpinion.tid}::int THEN 'disagree'::vote_enum_simple`,
-            );
-        }
-    }
-
-    if (sqlChunksMajorityProbability.length > 0) {
-        // no else clause, anything not part of the received data is not a majority opinion!
-        sqlChunksMajorityProbability.push(sql`END)`);
-    }
-    if (sqlChunksMajorityType.length > 0) {
-        // no else clause, anything not part of the received data is not a majority opinion!
-        sqlChunksMajorityType.push(sql`END)`);
-    }
-    const finalSqlMajorityProbability = sql.join(
-        sqlChunksMajorityProbability,
-        sql.raw(" "),
-    );
-    setClauseMajorityProbability = {
-        polisMajorityProbabilitySuccess: finalSqlMajorityProbability,
-    };
-    // no else clause, anything not part of the received data is not a majority opinion!
-    const finalSqlMajorityType = sql.join(sqlChunksMajorityType, sql.raw(" "));
-    setClauseMajorityType = {
-        polisMajorityType: finalSqlMajorityType,
-    };
-
-    if (sqlChunksMajorityProbability.length !== sqlChunksMajorityType.length) {
-        throw new Error(
-            `[Math] Some majority opinions are not assigned to their type for polisContentId=${String(
-                polisContentId,
-            )} and conversationSlugId=${conversationSlugId}`,
-        );
-    }
-
-    if (
-        sqlChunksMajorityProbability.length === 0 &&
-        sqlChunksMajorityType.length === 0
-    ) {
-        await db
-            .update(opinionTable)
-            .set({
-                ...setClauseCommentPriority,
-                ...setClauseGroupAwareConsensusAgree,
-                ...setClauseGroupAwareConsensusDisagree,
-                ...setClauseCommentExtremities,
-                updatedAt: nowZeroMs(),
-            })
-            .where(eq(opinionTable.conversationId, conversationId));
-    } else {
-        await db
-            .update(opinionTable)
-            .set({
-                ...setClauseCommentPriority,
-                ...setClauseGroupAwareConsensusAgree,
-                ...setClauseGroupAwareConsensusDisagree,
-                ...setClauseCommentExtremities,
-                ...setClauseMajorityProbability,
-                ...setClauseMajorityType,
-                updatedAt: nowZeroMs(),
-            })
-            .where(eq(opinionTable.conversationId, conversationId));
-    }
-    /////
-    /////
-    // Step 1: Filter out nulls and undefined
-    // Step 2: Use Set to remove duplicates
     const groupsSeenInParticipantsDf = Array.from(
         new Set(
             polisMathResults.participants_df
@@ -357,6 +185,7 @@ async function doLoadPolisMathResults({
             )} clusters`,
         );
     }
+
     const participantIds = polisMathResults.participants_df.map(
         (p) => p.participant_id,
     );
@@ -364,10 +193,20 @@ async function doLoadPolisMathResults({
         db,
         polisParticipantIds: participantIds,
     });
+
     const clustersInsightsForLlm: Record<
         string,
         ClusterInsightsWithOpinionIds
     > = {};
+    const clusterIdsByKey: Record<PolisKey, number> = {} as Record<
+        PolisKey,
+        number
+    >;
+    const groupCommentStatsByKey: Record<PolisKey, any[]> = {} as Record<
+        PolisKey,
+        any[]
+    >;
+
     for (let clusterKey = 0; clusterKey < minNumberOfClusters; clusterKey++) {
         const repnessEntry = polisMathResults.repness[clusterKey];
         const groupCommentStatsEntry =
@@ -377,11 +216,7 @@ async function doLoadPolisMathResults({
                 String(participant.cluster_id) === String(clusterKey),
         );
         const polisClusterExternalId = parseInt(
-            // TODO: do that properly instead of parsing without try catch
-            Object.keys(
-                // temporary work-around until
-                polisMathResults.group_comment_stats,
-            )[clusterKey],
+            Object.keys(polisMathResults.group_comment_stats)[clusterKey],
         );
         let polisClusterKeyStr: PolisKey;
         switch (clusterKey) {
@@ -422,6 +257,8 @@ async function doLoadPolisMathResults({
             agreesWith: [],
             disagreesWith: [],
         };
+
+        // Insert cluster and get ID
         const polisClusterQuery = await db
             .insert(polisClusterTable)
             .values({
@@ -432,7 +269,10 @@ async function doLoadPolisMathResults({
             })
             .returning({ polisClusterId: polisClusterTable.id });
         const polisClusterId = polisClusterQuery[0].polisClusterId;
+        clusterIdsByKey[polisClusterKeyStr] = polisClusterId;
+        groupCommentStatsByKey[polisClusterKeyStr] = groupCommentStatsEntry;
 
+        // Insert cluster users
         const members = participants.map((participant) => {
             return {
                 polisContentId: polisContentId,
@@ -447,6 +287,8 @@ async function doLoadPolisMathResults({
                 `[Math] No members to insert in polisClusterUserTable for clusterKey=${polisClusterKeyStr}, polisClusterId=${String(polisClusterId)} and polisContentId=${String(polisContentId)}`,
             );
         }
+
+        // Insert cluster opinions
         const repnesses = [];
         for (const repness of repnessEntry) {
             repnesses.push({
@@ -482,422 +324,305 @@ async function doLoadPolisMathResults({
                 )}' and for polisContentId='${String(polisContentId)}' for clusterKey=${polisClusterKeyStr}, polisClusterId=${String(polisClusterId)} and polisContentId=${String(polisContentId)}`,
             );
         }
-
-        // building bulk updates for numAgrees, numDisagrees & numPasses
-        const sqlChunksForNumAgrees: SQL[] = [];
-        const sqlChunksForNumDisagrees: SQL[] = [];
-        const sqlChunksForNumPasses: SQL[] = [];
-        sqlChunksForNumAgrees.push(sql`(CASE`);
-        sqlChunksForNumDisagrees.push(sql`(CASE`);
-        sqlChunksForNumPasses.push(sql`(CASE`);
-        for (const groupCommentStats of groupCommentStatsEntry) {
-            const totalVotes = groupCommentStats.ns;
-            const totalAgrees = groupCommentStats.na;
-            const totalDisagrees = groupCommentStats.nd;
-            const totalPasses = totalVotes - totalAgrees - totalDisagrees;
-            const opinionId = groupCommentStats.statement_id;
-            sqlChunksForNumAgrees.push(
-                sql`WHEN ${opinionTable.id} = ${opinionId} THEN ${totalAgrees}`,
-            );
-            sqlChunksForNumDisagrees.push(
-                sql`WHEN ${opinionTable.id} = ${opinionId} THEN ${totalDisagrees}`,
-            );
-            sqlChunksForNumPasses.push(
-                sql`WHEN ${opinionTable.id} = ${opinionId} THEN ${totalPasses}`,
-            );
-        }
-        switch (polisClusterKeyStr) {
-            case "0": {
-                sqlChunksForNumAgrees.push(sql`ELSE 0::int`);
-                sqlChunksForNumDisagrees.push(sql`ELSE 0::int`);
-                sqlChunksForNumPasses.push(sql`ELSE 0::int`);
-                sqlChunksForNumAgrees.push(sql`END)`);
-                sqlChunksForNumDisagrees.push(sql`END)`);
-                sqlChunksForNumPasses.push(sql`END)`);
-                const finalSqlNumAgrees: SQL = sql.join(
-                    sqlChunksForNumAgrees,
-                    sql.raw(" "),
-                );
-                const finalSqlNumDisagrees: SQL = sql.join(
-                    sqlChunksForNumDisagrees,
-                    sql.raw(" "),
-                );
-                const finalSqlNumPasses: SQL = sql.join(
-                    sqlChunksForNumPasses,
-                    sql.raw(" "),
-                );
-                await db
-                    .update(opinionTable)
-                    .set({
-                        polisCluster0Id: polisClusterId,
-                        polisCluster0NumAgrees: finalSqlNumAgrees,
-                        polisCluster0NumDisagrees: finalSqlNumDisagrees,
-                        polisCluster0NumPasses: finalSqlNumPasses,
-                        updatedAt: nowZeroMs(),
-                    })
-                    .where(eq(opinionTable.conversationId, conversationId));
-                // commenting out because we want every opinions to be shown the existing clusters, to simplify data presentation
-                // .where(inArray(opinionTable.slugId, opinionSlugIds));
-                break;
-            }
-            case "1": {
-                sqlChunksForNumAgrees.push(sql`ELSE 0::int`);
-                sqlChunksForNumDisagrees.push(sql`ELSE 0::int`);
-                sqlChunksForNumPasses.push(sql`ELSE 0::int`);
-                sqlChunksForNumAgrees.push(sql`END)`);
-                sqlChunksForNumDisagrees.push(sql`END)`);
-                sqlChunksForNumPasses.push(sql`END)`);
-                const finalSqlNumAgrees: SQL = sql.join(
-                    sqlChunksForNumAgrees,
-                    sql.raw(" "),
-                );
-                const finalSqlNumDisagrees: SQL = sql.join(
-                    sqlChunksForNumDisagrees,
-                    sql.raw(" "),
-                );
-                const finalSqlNumPasses: SQL = sql.join(
-                    sqlChunksForNumPasses,
-                    sql.raw(" "),
-                );
-                await db
-                    .update(opinionTable)
-                    .set({
-                        polisCluster1Id: polisClusterId,
-                        polisCluster1NumAgrees: finalSqlNumAgrees,
-                        polisCluster1NumDisagrees: finalSqlNumDisagrees,
-                        polisCluster1NumPasses: finalSqlNumPasses,
-                        updatedAt: nowZeroMs(),
-                    })
-                    .where(eq(opinionTable.conversationId, conversationId));
-                // commenting out because we want every opinions to be shown the existing clusters, to simplify data presentation
-                // .where(inArray(opinionTable.slugId, opinionSlugIds));
-                break;
-            }
-            case "2": {
-                sqlChunksForNumAgrees.push(sql`ELSE 0::int`);
-                sqlChunksForNumDisagrees.push(sql`ELSE 0::int`);
-                sqlChunksForNumPasses.push(sql`ELSE 0::int`);
-                sqlChunksForNumAgrees.push(sql`END)`);
-                sqlChunksForNumDisagrees.push(sql`END)`);
-                sqlChunksForNumPasses.push(sql`END)`);
-                const finalSqlNumAgrees: SQL = sql.join(
-                    sqlChunksForNumAgrees,
-                    sql.raw(" "),
-                );
-                const finalSqlNumDisagrees: SQL = sql.join(
-                    sqlChunksForNumDisagrees,
-                    sql.raw(" "),
-                );
-                const finalSqlNumPasses: SQL = sql.join(
-                    sqlChunksForNumPasses,
-                    sql.raw(" "),
-                );
-                await db
-                    .update(opinionTable)
-                    .set({
-                        polisCluster2Id: polisClusterId,
-                        polisCluster2NumAgrees: finalSqlNumAgrees,
-                        polisCluster2NumDisagrees: finalSqlNumDisagrees,
-                        polisCluster2NumPasses: finalSqlNumPasses,
-                        updatedAt: nowZeroMs(),
-                    })
-                    .where(eq(opinionTable.conversationId, conversationId));
-                // commenting out because we want every opinions to be shown the existing clusters, to simplify data presentation
-                // .where(inArray(opinionTable.slugId, opinionSlugIds));
-                break;
-            }
-            case "3": {
-                sqlChunksForNumAgrees.push(sql`ELSE 0::int`);
-                sqlChunksForNumDisagrees.push(sql`ELSE 0::int`);
-                sqlChunksForNumPasses.push(sql`ELSE 0::int`);
-                sqlChunksForNumAgrees.push(sql`END)`);
-                sqlChunksForNumDisagrees.push(sql`END)`);
-                sqlChunksForNumPasses.push(sql`END)`);
-                const finalSqlNumAgrees: SQL = sql.join(
-                    sqlChunksForNumAgrees,
-                    sql.raw(" "),
-                );
-                const finalSqlNumDisagrees: SQL = sql.join(
-                    sqlChunksForNumDisagrees,
-                    sql.raw(" "),
-                );
-                const finalSqlNumPasses: SQL = sql.join(
-                    sqlChunksForNumPasses,
-                    sql.raw(" "),
-                );
-                await db
-                    .update(opinionTable)
-                    .set({
-                        polisCluster3Id: polisClusterId,
-                        polisCluster3NumAgrees: finalSqlNumAgrees,
-                        polisCluster3NumDisagrees: finalSqlNumDisagrees,
-                        polisCluster3NumPasses: finalSqlNumPasses,
-                        updatedAt: nowZeroMs(),
-                    })
-                    .where(eq(opinionTable.conversationId, conversationId));
-                // commenting out because we want every opinions to be shown the existing clusters, to simplify data presentation
-                // .where(inArray(opinionTable.slugId, opinionSlugIds));
-                break;
-            }
-            case "4": {
-                sqlChunksForNumAgrees.push(sql`ELSE 0::int`);
-                sqlChunksForNumDisagrees.push(sql`ELSE 0::int`);
-                sqlChunksForNumPasses.push(sql`ELSE 0::int`);
-                sqlChunksForNumAgrees.push(sql`END)`);
-                sqlChunksForNumDisagrees.push(sql`END)`);
-                sqlChunksForNumPasses.push(sql`END)`);
-                const finalSqlNumAgrees: SQL = sql.join(
-                    sqlChunksForNumAgrees,
-                    sql.raw(" "),
-                );
-                const finalSqlNumDisagrees: SQL = sql.join(
-                    sqlChunksForNumDisagrees,
-                    sql.raw(" "),
-                );
-                const finalSqlNumPasses: SQL = sql.join(
-                    sqlChunksForNumPasses,
-                    sql.raw(" "),
-                );
-                await db
-                    .update(opinionTable)
-                    .set({
-                        polisCluster4Id: polisClusterId,
-                        polisCluster4NumAgrees: finalSqlNumAgrees,
-                        polisCluster4NumDisagrees: finalSqlNumDisagrees,
-                        polisCluster4NumPasses: finalSqlNumPasses,
-                        updatedAt: nowZeroMs(),
-                    })
-                    .where(eq(opinionTable.conversationId, conversationId));
-                // commenting out because we want every opinions to be shown the existing clusters, to simplify data presentation
-                // .where(inArray(opinionTable.slugId, opinionSlugIds));
-                break;
-            }
-            case "5": {
-                sqlChunksForNumAgrees.push(sql`ELSE 0::int`);
-                sqlChunksForNumDisagrees.push(sql`ELSE 0::int`);
-                sqlChunksForNumPasses.push(sql`ELSE 0::int`);
-                sqlChunksForNumAgrees.push(sql`END)`);
-                sqlChunksForNumDisagrees.push(sql`END)`);
-                sqlChunksForNumPasses.push(sql`END)`);
-                const finalSqlNumAgrees: SQL = sql.join(
-                    sqlChunksForNumAgrees,
-                    sql.raw(" "),
-                );
-                const finalSqlNumDisagrees: SQL = sql.join(
-                    sqlChunksForNumDisagrees,
-                    sql.raw(" "),
-                );
-                const finalSqlNumPasses: SQL = sql.join(
-                    sqlChunksForNumPasses,
-                    sql.raw(" "),
-                );
-                await db
-                    .update(opinionTable)
-                    .set({
-                        polisCluster5Id: polisClusterId,
-                        polisCluster5NumAgrees: finalSqlNumAgrees,
-                        polisCluster5NumDisagrees: finalSqlNumDisagrees,
-                        polisCluster5NumPasses: finalSqlNumPasses,
-                        updatedAt: nowZeroMs(),
-                    })
-                    .where(eq(opinionTable.conversationId, conversationId));
-                // commenting out because we want every opinions to be shown the existing clusters, to simplify data presentation
-                // .where(inArray(opinionTable.slugId, opinionSlugIds));
-                break;
-            }
-        }
-    }
-    // remove outdated polisClusterCache from opinionTable
-    switch (minNumberOfClusters) {
-        case 0:
-            await db
-                .update(opinionTable)
-                .set({
-                    polisCluster0Id: null,
-                    polisCluster0NumAgrees: null,
-                    polisCluster0NumDisagrees: null,
-                    polisCluster0NumPasses: null,
-                    polisCluster1Id: null,
-                    polisCluster1NumAgrees: null,
-                    polisCluster1NumDisagrees: null,
-                    polisCluster1NumPasses: null,
-                    polisCluster2Id: null,
-                    polisCluster2NumAgrees: null,
-                    polisCluster2NumDisagrees: null,
-                    polisCluster2NumPasses: null,
-                    polisCluster3Id: null,
-                    polisCluster3NumAgrees: null,
-                    polisCluster3NumDisagrees: null,
-                    polisCluster3NumPasses: null,
-                    polisCluster4Id: null,
-                    polisCluster4NumAgrees: null,
-                    polisCluster4NumDisagrees: null,
-                    polisCluster4NumPasses: null,
-                    polisCluster5Id: null,
-                    polisCluster5NumAgrees: null,
-                    polisCluster5NumDisagrees: null,
-                    polisCluster5NumPasses: null,
-                    updatedAt: nowZeroMs(),
-                })
-                .where(eq(opinionTable.conversationId, conversationId));
-            // commenting out because we want every opinions to be shown the existing clusters, to simplify data presentation
-            // .where(inArray(opinionTable.slugId, opinionSlugIds));
-            break;
-        case 1:
-            await db
-                .update(opinionTable)
-                .set({
-                    polisCluster1Id: null,
-                    polisCluster1NumAgrees: null,
-                    polisCluster1NumDisagrees: null,
-                    polisCluster1NumPasses: null,
-                    polisCluster2Id: null,
-                    polisCluster2NumAgrees: null,
-                    polisCluster2NumDisagrees: null,
-                    polisCluster2NumPasses: null,
-                    polisCluster3Id: null,
-                    polisCluster3NumAgrees: null,
-                    polisCluster3NumDisagrees: null,
-                    polisCluster3NumPasses: null,
-                    polisCluster4Id: null,
-                    polisCluster4NumAgrees: null,
-                    polisCluster4NumDisagrees: null,
-                    polisCluster4NumPasses: null,
-                    polisCluster5Id: null,
-                    polisCluster5NumAgrees: null,
-                    polisCluster5NumDisagrees: null,
-                    polisCluster5NumPasses: null,
-                    updatedAt: nowZeroMs(),
-                })
-                .where(eq(opinionTable.conversationId, conversationId));
-            // commenting out because we want every opinions to be shown the existing clusters, to simplify data presentation
-            // .where(inArray(opinionTable.slugId, opinionSlugIds));
-            break;
-        case 2:
-            await db
-                .update(opinionTable)
-                .set({
-                    polisCluster2Id: null,
-                    polisCluster2NumAgrees: null,
-                    polisCluster2NumDisagrees: null,
-                    polisCluster2NumPasses: null,
-                    polisCluster3Id: null,
-                    polisCluster3NumAgrees: null,
-                    polisCluster3NumDisagrees: null,
-                    polisCluster3NumPasses: null,
-                    polisCluster4Id: null,
-                    polisCluster4NumAgrees: null,
-                    polisCluster4NumDisagrees: null,
-                    polisCluster4NumPasses: null,
-                    polisCluster5Id: null,
-                    polisCluster5NumAgrees: null,
-                    polisCluster5NumDisagrees: null,
-                    polisCluster5NumPasses: null,
-                    updatedAt: nowZeroMs(),
-                })
-                .where(eq(opinionTable.conversationId, conversationId));
-            // commenting out because we want every opinions to be shown the existing clusters, to simplify data presentation
-            // .where(inArray(opinionTable.slugId, opinionSlugIds));
-            break;
-        case 3:
-            await db
-                .update(opinionTable)
-                .set({
-                    polisCluster3Id: null,
-                    polisCluster3NumAgrees: null,
-                    polisCluster3NumDisagrees: null,
-                    polisCluster3NumPasses: null,
-                    polisCluster4Id: null,
-                    polisCluster4NumAgrees: null,
-                    polisCluster4NumDisagrees: null,
-                    polisCluster4NumPasses: null,
-                    polisCluster5Id: null,
-                    polisCluster5NumAgrees: null,
-                    polisCluster5NumDisagrees: null,
-                    polisCluster5NumPasses: null,
-                    updatedAt: nowZeroMs(),
-                })
-                .where(eq(opinionTable.conversationId, conversationId));
-            // commenting out because we want every opinions to be shown the existing clusters, to simplify data presentation
-            // .where(inArray(opinionTable.slugId, opinionSlugIds));
-            break;
-        case 4:
-            await db
-                .update(opinionTable)
-                .set({
-                    polisCluster4Id: null,
-                    polisCluster4NumAgrees: null,
-                    polisCluster4NumDisagrees: null,
-                    polisCluster4NumPasses: null,
-                    polisCluster5Id: null,
-                    polisCluster5NumAgrees: null,
-                    polisCluster5NumDisagrees: null,
-                    polisCluster5NumPasses: null,
-                    updatedAt: nowZeroMs(),
-                })
-                .where(eq(opinionTable.conversationId, conversationId));
-            // commenting out because we want every opinions to be shown the existing clusters, to simplify data presentation
-            // .where(inArray(opinionTable.slugId, opinionSlugIds));
-            break;
-        case 5:
-            await db
-                .update(opinionTable)
-                .set({
-                    polisCluster5Id: null,
-                    polisCluster5NumAgrees: null,
-                    polisCluster5NumDisagrees: null,
-                    polisCluster5NumPasses: null,
-                    updatedAt: nowZeroMs(),
-                })
-                .where(eq(opinionTable.conversationId, conversationId));
-            // commenting out because we want every opinions to be shown the existing clusters, to simplify data presentation
-            // .where(inArray(opinionTable.slugId, opinionSlugIds));
-            break;
-        case 6:
-            log.info("[Math] No cluster cache to empty");
-            break;
-        default:
-            log.warn(
-                `[Math] There are an unexpectecly high minimum number of clusters: ${String(
-                    minNumberOfClusters,
-                )}`,
-            );
     }
 
-    return { clustersInsightsForLlm, polisContentId, minNumberOfClusters };
+    return {
+        clustersInsightsForLlm,
+        polisContentId,
+        minNumberOfClusters,
+        clusterIdsByKey,
+        groupCommentStatsByKey,
+    };
 }
 
-async function loadPolisMathResults({
+/**
+ * Phase 3: Atomic activation (Transaction)
+ * Updates AI labels, translations, opinionTable with all math data, and conversationTable
+ * This makes the new data "live" atomically
+ */
+async function phase3ActivateNewData({
     db,
-    conversationSlugId,
     conversationId,
+    polisContentId,
     polisMathResults,
-}: LoadPolisMathResultsProps): Promise<{
-    clustersInsightsForLlm: Record<string, ClusterInsightsWithOpinionIds>;
+    clusterIdsByKey,
+    groupCommentStatsByKey,
+    minNumberOfClusters,
+    aiClustersLabelsAndSummaries,
+    translations,
+}: {
+    db: PostgresJsDatabase;
+    conversationId: number;
     polisContentId: number;
+    polisMathResults: MathResults;
+    clusterIdsByKey: Record<PolisKey, number>;
+    groupCommentStatsByKey: Record<PolisKey, any[]>;
     minNumberOfClusters: number;
-}> {
-    let doTransaction = true;
-    if (db instanceof PgTransaction) {
-        doTransaction = false;
-    }
-    if (doTransaction) {
-        return await db.transaction(async (tx) => {
-            return await doLoadPolisMathResults({
+    aiClustersLabelsAndSummaries?: Record<
+        string,
+        { label: string; summary: string } | undefined
+    >;
+    translations?: Array<{
+        polisClusterId: number;
+        languageCode: string;
+        aiLabel: string | null;
+        aiSummary: string | null;
+    }>;
+}): Promise<void> {
+    await db.transaction(async (tx) => {
+        // Write AI labels and summaries if available
+        if (aiClustersLabelsAndSummaries) {
+            await updateClustersLabelsAndSummaries({
                 db: tx,
-                conversationSlugId,
                 conversationId,
-                polisMathResults,
+                polisContentId,
+                aiClustersLabelsAndSummaries,
             });
-        });
-    } else {
-        return await doLoadPolisMathResults({
-            db: db,
-            conversationSlugId,
-            conversationId,
-            polisMathResults,
-        });
-    }
+        }
+
+        // Insert translations if available
+        if (translations && translations.length > 0) {
+            await insertClusterTranslations({
+                db: tx,
+                translations,
+                conversationId,
+            });
+        }
+
+        // Build SQL clauses for priorities, consensus, extremities
+        let setClauseCommentPriority = {};
+        let setClauseGroupAwareConsensusAgree = {};
+        let setClauseGroupAwareConsensusDisagree = {};
+        let setClauseCommentExtremities = {};
+        let setClauseMajorityProbability = {};
+        let setClauseMajorityType = {};
+
+        if (Object.keys(polisMathResults.statements_df).length !== 0) {
+            const sqlChunksPriorities: SQL[] = [];
+            sqlChunksPriorities.push(sql`(CASE`);
+            const sqlChunksGroupAwareConsensusAgree: SQL[] = [];
+            sqlChunksGroupAwareConsensusAgree.push(sql`(CASE`);
+            const sqlChunksGroupAwareConsensusDisagree: SQL[] = [];
+            sqlChunksGroupAwareConsensusDisagree.push(sql`(CASE`);
+            const sqlChunksExtremities: SQL[] = [];
+            sqlChunksExtremities.push(sql`(CASE`);
+            for (const {
+                statement_id,
+                priority,
+                "group-aware-consensus-agree": groupAwareConsensusAgree,
+                "group-aware-consensus-disagree": groupAwareConsensusDisagree,
+                extremity,
+            } of polisMathResults.statements_df) {
+                sqlChunksPriorities.push(
+                    sql`WHEN ${opinionTable.id} = ${statement_id}::int THEN ${priority}`,
+                );
+                sqlChunksGroupAwareConsensusAgree.push(
+                    sql`WHEN ${opinionTable.id} = ${statement_id}::int THEN ${groupAwareConsensusAgree}`,
+                );
+                sqlChunksGroupAwareConsensusDisagree.push(
+                    sql`WHEN ${opinionTable.id} = ${statement_id}::int THEN ${groupAwareConsensusDisagree}`,
+                );
+                sqlChunksExtremities.push(
+                    sql`WHEN ${opinionTable.id} = ${statement_id}::int THEN ${extremity}`,
+                );
+            }
+
+            sqlChunksPriorities.push(sql`ELSE polis_priority`);
+            sqlChunksPriorities.push(sql`END)`);
+            const finalSqlCommentPriorities = sql.join(
+                sqlChunksPriorities,
+                sql.raw(" "),
+            );
+            setClauseCommentPriority = {
+                polisPriority: finalSqlCommentPriorities,
+            };
+
+            sqlChunksGroupAwareConsensusAgree.push(
+                sql`ELSE polis_ga_consensus_pa`,
+            );
+            sqlChunksGroupAwareConsensusAgree.push(sql`END)`);
+            const finalSqlGroupAwareConsensusAgree = sql.join(
+                sqlChunksGroupAwareConsensusAgree,
+                sql.raw(" "),
+            );
+            setClauseGroupAwareConsensusAgree = {
+                polisGroupAwareConsensusProbabilityAgree:
+                    finalSqlGroupAwareConsensusAgree,
+            };
+
+            sqlChunksGroupAwareConsensusDisagree.push(
+                sql`ELSE polis_ga_consensus_pd`,
+            );
+            sqlChunksGroupAwareConsensusDisagree.push(sql`END)`);
+            const finalSqlGroupAwareConsensusDisagree = sql.join(
+                sqlChunksGroupAwareConsensusDisagree,
+                sql.raw(" "),
+            );
+            setClauseGroupAwareConsensusDisagree = {
+                polisGroupAwareConsensusProbabilityDisagree:
+                    finalSqlGroupAwareConsensusDisagree,
+            };
+
+            sqlChunksExtremities.push(sql`ELSE polis_divisiveness`);
+            sqlChunksExtremities.push(sql`END)`);
+            const finalSqlCommentExtremities: SQL = sql.join(
+                sqlChunksExtremities,
+                sql.raw(" "),
+            );
+            setClauseCommentExtremities = {
+                polisDivisiveness: finalSqlCommentExtremities,
+            };
+        }
+
+        // Build SQL clauses for majority opinions
+        const sqlChunksMajorityProbability: SQL[] = [];
+        const sqlChunksMajorityType: SQL[] = [];
+
+        if (polisMathResults.consensus.agree.length > 0) {
+            sqlChunksMajorityProbability.push(sql`(CASE`);
+            sqlChunksMajorityType.push(sql`(CASE`);
+            for (const consensusOpinion of polisMathResults.consensus.agree) {
+                sqlChunksMajorityProbability.push(
+                    sql`WHEN ${opinionTable.id} = ${consensusOpinion.tid}::int THEN ${consensusOpinion["p-success"]}::real`,
+                );
+                sqlChunksMajorityType.push(
+                    sql`WHEN ${opinionTable.id} = ${consensusOpinion.tid}::int THEN 'agree'::vote_enum_simple`,
+                );
+            }
+        }
+        if (polisMathResults.consensus.disagree.length > 0) {
+            if (sqlChunksMajorityProbability.length === 0) {
+                sqlChunksMajorityProbability.push(sql`(CASE`);
+            }
+            if (sqlChunksMajorityType.length === 0) {
+                sqlChunksMajorityType.push(sql`(CASE`);
+            }
+            for (const consensusOpinion of polisMathResults.consensus
+                .disagree) {
+                sqlChunksMajorityProbability.push(
+                    sql`WHEN ${opinionTable.id} = ${consensusOpinion.tid}::int THEN ${consensusOpinion["p-success"]}::real`,
+                );
+                sqlChunksMajorityType.push(
+                    sql`WHEN ${opinionTable.id} = ${consensusOpinion.tid}::int THEN 'disagree'::vote_enum_simple`,
+                );
+            }
+        }
+
+        if (sqlChunksMajorityProbability.length > 0) {
+            sqlChunksMajorityProbability.push(sql`END)`);
+        }
+        if (sqlChunksMajorityType.length > 0) {
+            sqlChunksMajorityType.push(sql`END)`);
+        }
+        const finalSqlMajorityProbability = sql.join(
+            sqlChunksMajorityProbability,
+            sql.raw(" "),
+        );
+        setClauseMajorityProbability = {
+            polisMajorityProbabilitySuccess: finalSqlMajorityProbability,
+        };
+        const finalSqlMajorityType = sql.join(
+            sqlChunksMajorityType,
+            sql.raw(" "),
+        );
+        setClauseMajorityType = {
+            polisMajorityType: finalSqlMajorityType,
+        };
+
+        // Build cluster cache updates
+        const clusterUpdates: Record<string, any> = {};
+        const polisKeys: PolisKey[] = ["0", "1", "2", "3", "4", "5"];
+
+        for (let i = 0; i < minNumberOfClusters; i++) {
+            const polisKey = polisKeys[i];
+            const polisClusterId = clusterIdsByKey[polisKey];
+            const groupCommentStatsEntry = groupCommentStatsByKey[polisKey];
+
+            if (!polisClusterId || !groupCommentStatsEntry) {
+                continue;
+            }
+
+            // Build SQL for this cluster
+            const sqlChunksForNumAgrees: SQL[] = [];
+            const sqlChunksForNumDisagrees: SQL[] = [];
+            const sqlChunksForNumPasses: SQL[] = [];
+            sqlChunksForNumAgrees.push(sql`(CASE`);
+            sqlChunksForNumDisagrees.push(sql`(CASE`);
+            sqlChunksForNumPasses.push(sql`(CASE`);
+            for (const groupCommentStats of groupCommentStatsEntry) {
+                const totalVotes = groupCommentStats.ns;
+                const totalAgrees = groupCommentStats.na;
+                const totalDisagrees = groupCommentStats.nd;
+                const totalPasses = totalVotes - totalAgrees - totalDisagrees;
+                const opinionId = groupCommentStats.statement_id;
+                sqlChunksForNumAgrees.push(
+                    sql`WHEN ${opinionTable.id} = ${opinionId} THEN ${totalAgrees}`,
+                );
+                sqlChunksForNumDisagrees.push(
+                    sql`WHEN ${opinionTable.id} = ${opinionId} THEN ${totalDisagrees}`,
+                );
+                sqlChunksForNumPasses.push(
+                    sql`WHEN ${opinionTable.id} = ${opinionId} THEN ${totalPasses}`,
+                );
+            }
+            sqlChunksForNumAgrees.push(sql`ELSE 0::int`);
+            sqlChunksForNumDisagrees.push(sql`ELSE 0::int`);
+            sqlChunksForNumPasses.push(sql`ELSE 0::int`);
+            sqlChunksForNumAgrees.push(sql`END)`);
+            sqlChunksForNumDisagrees.push(sql`END)`);
+            sqlChunksForNumPasses.push(sql`END)`);
+            const finalSqlNumAgrees: SQL = sql.join(
+                sqlChunksForNumAgrees,
+                sql.raw(" "),
+            );
+            const finalSqlNumDisagrees: SQL = sql.join(
+                sqlChunksForNumDisagrees,
+                sql.raw(" "),
+            );
+            const finalSqlNumPasses: SQL = sql.join(
+                sqlChunksForNumPasses,
+                sql.raw(" "),
+            );
+
+            clusterUpdates[`polisCluster${i}Id`] = polisClusterId;
+            clusterUpdates[`polisCluster${i}NumAgrees`] = finalSqlNumAgrees;
+            clusterUpdates[`polisCluster${i}NumDisagrees`] =
+                finalSqlNumDisagrees;
+            clusterUpdates[`polisCluster${i}NumPasses`] = finalSqlNumPasses;
+        }
+
+        // Clear out cluster caches for clusters that don't exist
+        for (let i = minNumberOfClusters; i < 6; i++) {
+            clusterUpdates[`polisCluster${i}Id`] = null;
+            clusterUpdates[`polisCluster${i}NumAgrees`] = null;
+            clusterUpdates[`polisCluster${i}NumDisagrees`] = null;
+            clusterUpdates[`polisCluster${i}NumPasses`] = null;
+        }
+
+        // Execute the big opinion table update
+        await tx
+            .update(opinionTable)
+            .set({
+                ...setClauseCommentPriority,
+                ...setClauseGroupAwareConsensusAgree,
+                ...setClauseGroupAwareConsensusDisagree,
+                ...setClauseCommentExtremities,
+                ...setClauseMajorityProbability,
+                ...setClauseMajorityType,
+                ...clusterUpdates,
+                updatedAt: nowZeroMs(),
+            })
+            .where(eq(opinionTable.conversationId, conversationId));
+
+        // Update conversation table to point to new polisContent
+        await tx
+            .update(conversationTable)
+            .set({
+                currentPolisContentId: polisContentId,
+                updatedAt: nowZeroMs(),
+            })
+            .where(eq(conversationTable.id, conversationId));
+    });
 }
 
 export async function getAndUpdatePolisMath({
@@ -913,6 +638,7 @@ export async function getAndUpdatePolisMath({
     awsAiLabelSummaryTopP,
     awsAiLabelSummaryMaxTokens,
     awsAiLabelSummaryPrompt,
+    googleCloudCredentials,
 }: GetAndUpdatePolisMathProps) {
     let polisMathResults: MathResults;
     try {
@@ -936,48 +662,136 @@ export async function getAndUpdatePolisMath({
             db,
             conversationId,
         });
-    const { clustersInsightsForLlm, polisContentId, minNumberOfClusters } =
-        await loadPolisMathResults({
-            db: db,
+
+    // Phase 1: Create immutable cluster structure (transactional)
+    log.info(
+        `[Math] Phase 1: Creating cluster structure for conversationId=${conversationId}`,
+    );
+    const {
+        clustersInsightsForLlm,
+        polisContentId,
+        minNumberOfClusters,
+        clusterIdsByKey,
+        groupCommentStatsByKey,
+    } = await db.transaction(async (tx) => {
+        return await phase1CreateClusterStructure({
+            db: tx,
             conversationSlugId,
             conversationId,
             polisMathResults,
         });
-    if (awsAiLabelSummaryEnable && minNumberOfClusters >= 2) {
-        // only run the AI if there are at least 2 clusters
-        const conversationInsightsWithOpinionIds: ConversationInsightsWithOpinionIds =
-            {
-                conversationTitle,
-                conversationBody,
-                clusters: clustersInsightsForLlm,
-            };
-        try {
-            await updateAiLabelsAndSummaries({
-                db: db,
-                conversationId: conversationId,
-                polisContentId,
-                conversationInsightsWithOpinionIds,
-                awsAiLabelSummaryRegion,
-                awsAiLabelSummaryModelId,
-                awsAiLabelSummaryTemperature,
-                awsAiLabelSummaryTopP,
-                awsAiLabelSummaryMaxTokens,
-                awsAiLabelSummaryPrompt,
-            });
-        } catch (e: unknown) {
-            log.error(
-                e,
-                `[LLM]: Error while trying to update the AI Label and Summary for conversationSlugId=${conversationSlugId}`,
+    });
+    log.info(
+        `[Math] Phase 1 complete: polisContentId=${polisContentId}, minNumberOfClusters=${minNumberOfClusters}`,
+    );
+
+    // Phase 2: External API calls (no transaction, no DB writes)
+    log.info(
+        `[Math] Phase 2: Calling external APIs for conversationId=${conversationId} and polisClusterId=${String(polisContentId)}`,
+    );
+    let aiClustersLabelsAndSummaries:
+        | Record<string, { label: string; summary: string } | undefined>
+        | undefined = undefined;
+    let translations:
+        | Array<{
+              polisClusterId: number;
+              languageCode: string;
+              aiLabel: string | null;
+              aiSummary: string | null;
+          }>
+        | undefined = undefined;
+
+    if (awsAiLabelSummaryEnable) {
+        if (minNumberOfClusters >= 2) {
+            const conversationInsightsWithOpinionIds: ConversationInsightsWithOpinionIds =
+                {
+                    conversationTitle,
+                    conversationBody,
+                    clusters: clustersInsightsForLlm,
+                };
+            try {
+                aiClustersLabelsAndSummaries =
+                    await generateAiLabelsAndSummaries({
+                        db: db,
+                        conversationId: conversationId,
+                        polisContentId,
+                        conversationInsightsWithOpinionIds,
+                        awsAiLabelSummaryRegion,
+                        awsAiLabelSummaryModelId,
+                        awsAiLabelSummaryTemperature,
+                        awsAiLabelSummaryTopP,
+                        awsAiLabelSummaryMaxTokens,
+                        awsAiLabelSummaryPrompt,
+                    });
+                log.info(
+                    `[Math] Phase 2: AI labels generated for conversationId=${conversationId} and polisClusterId=${String(polisContentId)}`,
+                );
+
+                if (googleCloudCredentials !== undefined) {
+                    try {
+                        translations = await generateAllClusterTranslations({
+                            googleCloudCredentials,
+                            clusterIdsByKey,
+                            aiClustersLabelsAndSummaries,
+                            conversationId,
+                        });
+                        log.info(
+                            `[Math] Phase 2: Translations generated for conversationId=${conversationId} and polisClusterId=${String(polisContentId)}`,
+                        );
+                    } catch (translationError: unknown) {
+                        log.error(
+                            translationError,
+                            `[Math] Phase 2: Translation failed for conversationId=${conversationId} and polisClusterId=${String(polisContentId)}, continuing without translations`,
+                        );
+                        // Don't fail the math update if translation fails
+                        translations = undefined;
+                    }
+                } else {
+                    log.warn(
+                        `[Math] Phase 2: Translations generation disabled, continuing without them for conversationId=${conversationId} and polisClusterId=${String(polisContentId)}`,
+                    );
+                }
+            } catch (e: unknown) {
+                log.error(
+                    e,
+                    `[Math] Phase 2: AI/Translation failed for conversationId=${conversationId} and polisClusterId=${String(polisContentId)}, continuing without AI labels`,
+                );
+                // Continue to Phase 3 even if AI fails - we still want to activate the math data
+                aiClustersLabelsAndSummaries = undefined;
+                translations = undefined;
+            }
+        } else {
+            log.warn(
+                `[Math] Phase 2 aborted for conversationId=${conversationId} and polisClusterId=${String(polisContentId)}: not enough clusters to create labels for conversationId=${conversationId}`,
             );
         }
+    } else {
+        log.warn(
+            `[Math] Phase 2 aborted for conversationId=${conversationId} and polisClusterId=${String(polisContentId)}: LLM feature disabled `,
+        );
     }
-    await db
-        .update(conversationTable)
-        .set({
-            currentPolisContentId: polisContentId,
-            updatedAt: nowZeroMs(),
-        })
-        .where(eq(conversationTable.id, conversationId));
+    log.info(
+        `[Math] Phase 2 complete for conversationId=${conversationId} and polisClusterId=${String(polisContentId)}`,
+    );
+
+    // Phase 3: Atomic activation (transactional)
+    log.info(
+        `[Math] Phase 3: Activating new data for conversationId=${conversationId} and polisClusterId=${String(polisContentId)}`,
+    );
+    await phase3ActivateNewData({
+        db,
+        conversationId,
+        polisContentId,
+        polisMathResults,
+        clusterIdsByKey,
+        groupCommentStatsByKey,
+        minNumberOfClusters,
+        aiClustersLabelsAndSummaries,
+        translations,
+    });
+    log.info(
+        `[Math] Phase 3 complete: Data activated for conversationId=${conversationId} and polisClusterId=${String(polisContentId)}`,
+    );
 }
 
 export async function getPolisVotes({

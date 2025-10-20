@@ -931,37 +931,48 @@ export async function getAndUpdatePolisMath({
             conversationId,
             polisMathResults,
         });
-    if (awsAiLabelSummaryEnable && minNumberOfClusters >= 2) {
-        // only run the AI if there are at least 2 clusters
-        const conversationInsightsWithOpinionIds: ConversationInsightsWithOpinionIds =
-            {
-                conversationTitle,
-                conversationBody,
-                clusters: clustersInsightsForLlm,
-            };
-        try {
-            await llmService.updateAiLabelsAndSummaries({
-                db: db,
-                conversationId: conversationId,
-                polisContentId,
-                conversationInsightsWithOpinionIds,
-                awsAiLabelSummaryRegion,
-                awsAiLabelSummaryModelId,
-                awsAiLabelSummaryTemperature,
-                awsAiLabelSummaryTopP,
-                awsAiLabelSummaryMaxTokens,
-                awsAiLabelSummaryPrompt,
-            });
-        } catch (e: unknown) {
-            log.error(
-                e,
-                `[LLM]: Error while trying to update the AI Label and Summary for conversationSlugId=${conversationSlugId}`,
+    // Phase 2: Calling external APIs for conversationId
+    if (minNumberOfClusters >= 2) {
+        if (awsAiLabelSummaryEnable) {
+            log.info(
+                `[Phase 2] Calling AWS Bedrock LLM API for conversationId=${conversationId}, conversationSlugId=${conversationSlugId}, minNumberOfClusters=${minNumberOfClusters}`,
+            );
+            // only run the AI if there are at least 2 clusters
+            const conversationInsightsWithOpinionIds: ConversationInsightsWithOpinionIds =
+                {
+                    conversationTitle,
+                    conversationBody,
+                    clusters: clustersInsightsForLlm,
+                };
+            try {
+                await llmService.updateAiLabelsAndSummaries({
+                    db: db,
+                    conversationId: conversationId,
+                    polisContentId,
+                    conversationInsightsWithOpinionIds,
+                    awsAiLabelSummaryRegion,
+                    awsAiLabelSummaryModelId,
+                    awsAiLabelSummaryTemperature,
+                    awsAiLabelSummaryTopP,
+                    awsAiLabelSummaryMaxTokens,
+                    awsAiLabelSummaryPrompt,
+                });
+            } catch (e: unknown) {
+                log.error(
+                    e,
+                    `[LLM]: Error while trying to update the AI Label and Summary for conversationSlugId=${conversationSlugId}`,
+                );
+            }
+        } else {
+            log.warn(
+                `[Phase 2] Skipping AWS Bedrock LLM API call for conversationId=${conversationId}, conversationSlugId=${conversationSlugId}: LLM feature not enabled (AWS_AI_LABEL_SUMMARY_ENABLE environment variable not set or false)`,
             );
         }
+    } else {
+        log.info(
+            `[Phase 2] Skipping AWS Bedrock LLM API call for conversationId=${conversationId}, conversationSlugId=${conversationSlugId}: not enough clusters (minNumberOfClusters=${minNumberOfClusters}, requires >= 2)`,
+        );
     }
-    // TODO: do that one every 2 minutes per conversation so as not to run into sync issues
-    // plus improving performance
-    // actually update the polisContent once we have the AI
     await db
         .update(conversationTable)
         .set({
