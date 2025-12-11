@@ -206,11 +206,20 @@ export function useBackendAuthApi() {
         oldIsGuestOrLoggedIn,
         newIsGuestOrLoggedIn,
       } = authStore.setLoginStatus(partialLoginStatus);
+
+      // Extract userId from old and new status for comparison
+      const oldUserId = oldLoginStatus.isKnown
+        ? oldLoginStatus.userId
+        : undefined;
+      const newUserId = newLoginStatus.isKnown
+        ? newLoginStatus.userId
+        : undefined;
+      const userIdChanged = oldUserId !== newUserId;
+
       if (
         (oldLoginStatus.isKnown !== newLoginStatus.isKnown || forceRefresh) &&
         newLoginStatus.isKnown == false
       ) {
-        console.log("Cleaning data from detecting change to unknown device");
         await logoutDataCleanup({
           shouldClearLanguagePreferences:
             oldIsGuestOrLoggedIn && !newIsGuestOrLoggedIn,
@@ -221,33 +230,36 @@ export function useBackendAuthApi() {
         return { authStateChanged: true, needsCacheRefresh: false };
       }
 
-      // Extract userId from old and new status for comparison
-      const oldUserId = oldLoginStatus.isKnown ? oldLoginStatus.userId : undefined;
-      const newUserId = newLoginStatus.isKnown ? newLoginStatus.userId : undefined;
-      const userIdChanged = oldUserId !== newUserId;
-
       const authStateChanged =
         oldIsGuestOrLoggedIn !== newIsGuestOrLoggedIn || userIdChanged;
+
+      // Detect new guest creation: transitioning from unknown/anonymous to a new guest
+      // In this case, we should NOT clear the cache to preserve optimistic updates (e.g., votes)
+      // but we still need to load authenticated modules for username/profile data
+      const isNewGuestCreation =
+        !oldIsGuestOrLoggedIn &&
+        newIsGuestOrLoggedIn &&
+        newLoginStatus.isKnown &&
+        !newLoginStatus.isLoggedIn;
 
       if (forceRefresh || authStateChanged)
         if (newIsGuestOrLoggedIn) {
           // Check if we should defer cache operations
           if (deferCacheOperations) {
-            console.log(
-              "Auth state changed but deferring cache operations for caller to handle"
-            );
             return { authStateChanged: true, needsCacheRefresh: true };
           }
 
-          console.log(
-            "Clearing query cache and loading authenticated modules upon detecting new login, guest user, or userId change"
-          );
-          // Clear all TanStack Query cache data to ensure fresh start for new user session
-          queryClient.clear();
+          // For new guest creation, skip cache clear but still load authenticated modules
+          // New guests have no prior data to clear, and skipping clear preserves
+          // optimistic updates (e.g., votes cast before guest was created)
+          if (!isNewGuestCreation) {
+            // Clear all TanStack Query cache data to ensure fresh start for new user session
+            queryClient.clear();
+          }
+
           await loadAuthenticatedModules();
           return { authStateChanged: true, needsCacheRefresh: false };
         } else {
-          console.log("Cleaning data from logging out");
           await logoutDataCleanup({
             shouldClearLanguagePreferences:
               oldIsGuestOrLoggedIn && !newIsGuestOrLoggedIn,

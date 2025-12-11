@@ -8,6 +8,7 @@ import type { VotingAction } from "src/shared/types/zod";
 import type { AxiosErrorResponse } from "../common";
 import { getErrorMessage } from "../common";
 import { useNotify } from "../../ui/notify";
+import type { FetchUserVotesForPostSlugIdsResponse } from "src/shared/types/dto";
 
 export function useUserVotesQuery({ postSlugId }: { postSlugId: string }) {
   const { fetchUserVotesForPostSlugIds } = useBackendVoteApi();
@@ -15,7 +16,9 @@ export function useUserVotesQuery({ postSlugId }: { postSlugId: string }) {
 
   return useQuery({
     queryKey: ["userVotes", postSlugId],
-    queryFn: () => fetchUserVotesForPostSlugIds([postSlugId]),
+    queryFn: async () => {
+      return await fetchUserVotesForPostSlugIds([postSlugId]);
+    },
     enabled: computed(() => postSlugId.length > 0 && isGuestOrLoggedIn.value),
     staleTime: 1000 * 60 * 5, // 5 minutes like comments
     retry: false, // Disable auto-retry
@@ -26,18 +29,75 @@ export function useVoteMutation(postSlugId: string) {
   const { castVoteForComment } = useBackendVoteApi();
   const { showNotifyMessage } = useNotify();
   const { markAnalysisAsStale } = useInvalidateCommentQueries();
+  const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({
+    mutationFn: async ({
       opinionSlugId,
       voteAction,
     }: {
       opinionSlugId: string;
       voteAction: VotingAction;
-    }) => castVoteForComment(opinionSlugId, voteAction),
+    }) => {
+      return castVoteForComment(opinionSlugId, voteAction);
+    },
 
-    onError: (error: AxiosErrorResponse) => {
-      // Handle error notification only
+    onMutate: async ({ opinionSlugId, voteAction }) => {
+      // Cancel any outgoing refetches to prevent race conditions
+      await queryClient.cancelQueries({ queryKey: ["userVotes", postSlugId] });
+
+      // Snapshot the previous value for rollback
+      const previousVotes = queryClient.getQueryData<FetchUserVotesForPostSlugIdsResponse>(
+        ["userVotes", postSlugId]
+      );
+
+      // Optimistically update the cache
+      queryClient.setQueryData<FetchUserVotesForPostSlugIdsResponse>(
+        ["userVotes", postSlugId],
+        (oldVotes) => {
+          const votes = oldVotes ?? [];
+
+          if (voteAction === "cancel") {
+            // Remove the vote for this opinion
+            return votes.filter((v) => v.opinionSlugId !== opinionSlugId);
+          }
+
+          // Find existing vote for this opinion
+          const existingVoteIndex = votes.findIndex(
+            (v) => v.opinionSlugId === opinionSlugId
+          );
+
+          const newVote = {
+            opinionSlugId,
+            votingAction: voteAction,
+          };
+
+          if (existingVoteIndex >= 0) {
+            // Update existing vote
+            const updatedVotes = [...votes];
+            updatedVotes[existingVoteIndex] = newVote;
+            return updatedVotes;
+          } else {
+            // Add new vote
+            return [...votes, newVote];
+          }
+        }
+      );
+
+      // Return context with previous value for rollback
+      return { previousVotes };
+    },
+
+    onError: (error: AxiosErrorResponse, variables, context) => {
+      // Rollback to previous state on error
+      if (context?.previousVotes !== undefined) {
+        queryClient.setQueryData(
+          ["userVotes", postSlugId],
+          context.previousVotes
+        );
+      }
+
+      // Show error notification
       if (error?.code) {
         showNotifyMessage(getErrorMessage(error));
       } else {
@@ -51,7 +111,15 @@ export function useVoteMutation(postSlugId: string) {
       markAnalysisAsStale(postSlugId);
     },
 
-    retry: false, // Disable auto-retry
+    onSettled: () => {
+      // NOTE: We intentionally do NOT invalidate here.
+      // Invalidation would trigger a refetch from the read replica which may not have
+      // the vote yet (replication lag), causing the optimistic update to be overwritten.
+      // The staleTime of 5 minutes ensures eventual consistency while preserving
+      // the optimistic state during the replication window.
+    },
+
+    retry: false,
   });
 }
 

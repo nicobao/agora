@@ -96,7 +96,6 @@ const localUserVote = ref<VotingOption | undefined>(undefined);
 const localNumAgrees = ref(0);
 const localNumDisagrees = ref(0);
 const localNumPasses = ref(0);
-const lastVoteTimestamp = ref(0); // Track time of last local user action
 
 const showLoginDialog = ref(false);
 const { setOpinionAgreementIntention } = useConversationLoginIntentions();
@@ -132,40 +131,22 @@ onMounted(() => {
   localNumDisagrees.value = props.commentItem.numDisagrees;
   localNumPasses.value = props.commentItem.numPasses;
 
-  // Initialize user vote from global state
+  // Initialize user vote from global state (TanStack Query cache)
   const existingVote = props.votingUtilities.userVotes.find(
     (vote) => vote.opinionSlugId === props.commentItem.opinionSlugId
   );
   localUserVote.value = existingVote?.votingAction;
 });
 
-// Watch for changes in user votes (e.g., after ticket verification, account merge, or login)
+// Watch for changes in user votes from TanStack Query cache
+// The cache is updated optimistically on vote, so we can trust it as source of truth
 watch(
   () => props.votingUtilities.userVotes,
   (newUserVotes) => {
     const existingVote = newUserVotes.find(
       (vote) => vote.opinionSlugId === props.commentItem.opinionSlugId
     );
-    const serverVoteAction = existingVote?.votingAction;
-
-    // Reconciliation Logic:
-    // 1. If server state matches local state, we are in sync.
-    if (serverVoteAction === localUserVote.value) {
-      return;
-    }
-
-    // 2. If server state differs, check if we have a recent local action (optimistic update)
-    // that might not yet be reflected in the read replica.
-    const timeSinceLastVote = Date.now() - lastVoteTimestamp.value;
-    const isOptimisticStateValid = timeSinceLastVote < 2000; // 2s grace period for replication
-
-    if (isOptimisticStateValid) {
-      // Ignore stale server data, keep optimistic local state
-      return;
-    }
-
-    // 3. Otherwise, accept server as source of truth
-    localUserVote.value = serverVoteAction;
+    localUserVote.value = existingVote?.votingAction;
   },
   { deep: true }
 );
@@ -204,15 +185,8 @@ async function onLoginCallback() {
   const needsLogin = props.loginRequiredToParticipate && !isLoggedIn.value;
   const hasZupassRequirement = props.requiresEventTicket !== undefined;
 
-  console.log("[CommentActionBar] onLoginCallback", {
-    needsLogin,
-    hasZupassRequirement,
-    isLoggedIn: isLoggedIn.value,
-  });
-
   // If user just needs Zupass verification (no login required), trigger it inline
   if (!needsLogin && hasZupassRequirement) {
-    console.log("[CommentActionBar] Triggering inline Zupass verification");
     await handleZupassVerification();
   }
   // Otherwise, dialog will route user to login via PreLoginIntentionDialog
@@ -234,10 +208,6 @@ async function handleZupassVerification() {
 
   if (result.success) {
     // Emit to parent so banner gets refreshed
-    console.log("[CommentActionBar] Emitting ticketVerified event", {
-      userIdChanged: result.userIdChanged,
-      needsCacheRefresh: result.needsCacheRefresh,
-    });
     emit("ticketVerified", {
       userIdChanged: result.userIdChanged,
       needsCacheRefresh: result.needsCacheRefresh,
@@ -271,17 +241,13 @@ async function castPersonalVote(
     voteAction = "cancel";
   }
 
-  // Store original state for rollback
-  const originalVote = localUserVote.value;
+  // Store original counter state for rollback (vote state is managed by TanStack Query)
   const originalNumAgrees = localNumAgrees.value;
   const originalNumDisagrees = localNumDisagrees.value;
   const originalNumPasses = localNumPasses.value;
 
-  // Track when we last voted for reconciliation
-  lastVoteTimestamp.value = Date.now();
-
-  // Apply optimistic updates locally
-  // Helper to update counter
+  // Apply optimistic updates to counters locally
+  // Note: localUserVote is synced from TanStack Query cache via the watch handler
   const updateCounter = (vote: VotingOption | undefined, delta: number) => {
     if (vote === "agree") {
       localNumAgrees.value += delta;
@@ -292,15 +258,12 @@ async function castPersonalVote(
     }
   };
 
-  // Remove old vote
+  // Remove old vote count
   updateCounter(currentVote, -1);
 
-  // Add new vote (unless canceling)
+  // Add new vote count (unless canceling)
   if (voteAction !== "cancel") {
-    localUserVote.value = voteAction;
     updateCounter(voteAction, 1);
-  } else {
-    localUserVote.value = undefined;
   }
 
   try {
@@ -310,24 +273,22 @@ async function castPersonalVote(
     );
 
     if (success) {
-      await updateAuthState({ partialLoginStatus: { isKnown: true } });
-      // Keep the optimistic changes
+      // Update auth state to ensure guest is registered if needed
+      await updateAuthState({
+        partialLoginStatus: { isKnown: true },
+      });
     } else {
-      // Revert optimistic changes
-      localUserVote.value = originalVote;
+      // Revert counter changes on failure
       localNumAgrees.value = originalNumAgrees;
       localNumDisagrees.value = originalNumDisagrees;
       localNumPasses.value = originalNumPasses;
-      lastVoteTimestamp.value = 0; // Reset timestamp to allow immediate server sync
       showNotifyMessage(t("voteFailed"));
     }
   } catch {
-    // Revert optimistic changes
-    localUserVote.value = originalVote;
+    // Revert counter changes on error
     localNumAgrees.value = originalNumAgrees;
     localNumDisagrees.value = originalNumDisagrees;
     localNumPasses.value = originalNumPasses;
-    lastVoteTimestamp.value = 0; // Reset timestamp to allow immediate server sync
     showNotifyMessage(t("voteFailed"));
   }
 }
