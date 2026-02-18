@@ -105,7 +105,7 @@ export function getI18nInstance(): I18n<
   return i18nInstance;
 }
 
-export default defineBoot(({ app }) => {
+export default defineBoot(async ({ app }) => {
   // Get stored language preference or detect from browser
   const storedLocale = localStorage.getItem("displayLanguage");
   const defaultLocale =
@@ -132,11 +132,10 @@ export default defineBoot(({ app }) => {
   // @ts-expect-error: Type inference issue with lazy loading
   i18nInstance = i18n;
 
-  // Load the initial locale if it's not English
+  // Load the initial locale before mounting the app to avoid flash of English
   if (defaultLocale !== "en") {
-    void loadLocaleMessages(defaultLocale).then(() => {
-      setI18nLanguage(defaultLocale);
-    });
+    await loadLocaleMessages(defaultLocale);
+    setI18nLanguage(defaultLocale);
   } else {
     setI18nLanguage(defaultLocale);
   }

@@ -1,4 +1,4 @@
-import { onMounted, type Ref, ref } from "vue";
+import { onMounted, onUnmounted, type Ref, ref } from "vue";
 
 export interface UseIdleMountOptions {
   /**
@@ -56,14 +56,26 @@ export function useIdleMount(
     isMounted.value = true;
   }
 
+  let idleCallbackHandle: ReturnType<typeof requestIdleCallback> | undefined;
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+
   onMounted(() => {
     if (immediate) return;
 
     if ("requestIdleCallback" in window) {
-      requestIdleCallback(mount, { timeout });
+      idleCallbackHandle = requestIdleCallback(mount, { timeout });
     } else {
       // Fallback for Safari/older browsers that don't support requestIdleCallback
-      setTimeout(mount, delay);
+      timeoutHandle = setTimeout(mount, delay);
+    }
+  });
+
+  onUnmounted(() => {
+    if (idleCallbackHandle !== undefined) {
+      cancelIdleCallback(idleCallbackHandle);
+    }
+    if (timeoutHandle !== undefined) {
+      clearTimeout(timeoutHandle);
     }
   });
 

@@ -81,7 +81,9 @@ export function useBackendAuthApi() {
       loadNotificationData(false),
       loadTopicsData(),
       loadLanguagePreferencesFromBackend(),
-    ]);
+    ]).catch((err) => {
+      console.error("Failed to load authenticated modules:", err);
+    });
   }
 
   // update the global state according to the change in login status

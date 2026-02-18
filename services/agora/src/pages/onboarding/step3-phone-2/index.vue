@@ -86,17 +86,6 @@ import { storeToRefs } from "pinia";
 import InputOtp from "primevue/inputotp";
 import { useQuasar } from "quasar";
 import DefaultImageExample from "src/components/onboarding/backgrounds/DefaultImageExample.vue";
-
-import {
-  type Step3Phone2Translations,
-  step3Phone2Translations,
-} from "./index.i18n";
-
-defineOptions({
-  components: {
-    PrimeInputOtp: InputOtp,
-  },
-});
 import StepperLayout from "src/components/onboarding/layouts/StepperLayout.vue";
 import InfoHeader from "src/components/onboarding/ui/InfoHeader.vue";
 import ZKButton from "src/components/ui-library/ZKButton.vue";
@@ -118,6 +107,17 @@ import { createDidOverwriteIfAlreadyExists } from "src/utils/crypto/ucan/operati
 import { useNotify } from "src/utils/ui/notify";
 import { onMounted, ref, watchEffect } from "vue";
 import { useRouter } from "vue-router";
+
+import {
+  type Step3Phone2Translations,
+  step3Phone2Translations,
+} from "./index.i18n";
+
+defineOptions({
+  components: {
+    PrimeInputOtp: InputOtp,
+  },
+});
 
 const { t } = useComponentI18n<Step3Phone2Translations>(
   step3Phone2Translations
