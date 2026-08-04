@@ -575,6 +575,27 @@
       "when": 1783464468255,
       "tag": "0081_abnormal_puff_adder",
       "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1784995853129,
+      "tag": "0082_fair_switch",
+      "breakpoints": true
+    },
+    {
+      "idx": 83,
+      "version": "7",
+      "when": 1785451496703,
+      "tag": "0083_public_sentinels",
+      "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "7",
+      "when": 1785788416076,
+      "tag": "0084_skinny_thena",
+      "breakpoints": true
     }
   ]
 }

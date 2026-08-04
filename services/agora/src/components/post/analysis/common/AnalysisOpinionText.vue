@@ -1,17 +1,16 @@
 <template>
   <div class="analysis-opinion-text">
-    <span v-if="isHiddenModerated" class="moderated-placeholder">
-      {{ t("hiddenModeratedStatement") }}
+    <span v-if="redactedPlaceholder !== undefined" class="redacted-placeholder">
+      {{ redactedPlaceholder }}
     </span>
-    <ZKHtmlContent
-      v-else
-      :html-body="opinionItem.opinion"
+    <VisibleAnalysisOpinionText
+      v-if="visibleContent !== undefined"
+      :content="visibleContent"
+      :opinion-slug-id="opinionItem.opinionSlugId"
       :compact-mode="compactMode"
       :enable-links="enableLinks"
-    />
-    <CommentModeration
-      v-if="showModerationWarning && isMovedToModerationHistory"
-      :comment-item="opinionItem"
+      :show-moderation-warning="showModerationWarning"
+      :translation-interactive="translationInteractive"
       :post-slug-id="postSlugId"
       :conversation-author-username="conversationAuthorUsername"
       :conversation-organization-name="conversationOrganizationName"
@@ -20,8 +19,6 @@
 </template>
 
 <script setup lang="ts">
-import CommentModeration from "src/components/post/comments/group/item/CommentModeration.vue";
-import ZKHtmlContent from "src/components/ui-library/ZKHtmlContent.vue";
 import { useComponentI18n } from "src/composables/ui/useComponentI18n";
 import type { AnalysisOpinionItem } from "src/shared/types/zod";
 import { computed } from "vue";
@@ -30,6 +27,7 @@ import {
   type AnalysisOpinionTextTranslations,
   analysisOpinionTextTranslations,
 } from "./AnalysisOpinionText.i18n";
+import VisibleAnalysisOpinionText from "./VisibleAnalysisOpinionText.vue";
 
 const props = withDefaults(
   defineProps<{
@@ -37,7 +35,8 @@ const props = withDefaults(
     compactMode?: boolean;
     enableLinks?: boolean;
     showModerationWarning?: boolean;
-    postSlugId?: string;
+    translationInteractive?: boolean;
+    postSlugId: string;
     conversationAuthorUsername?: string;
     conversationOrganizationName?: string;
   }>(),
@@ -45,7 +44,7 @@ const props = withDefaults(
     compactMode: false,
     enableLinks: false,
     showModerationWarning: true,
-    postSlugId: "",
+    translationInteractive: true,
     conversationAuthorUsername: "",
     conversationOrganizationName: "",
   }
@@ -54,18 +53,21 @@ const props = withDefaults(
 const { t } = useComponentI18n<AnalysisOpinionTextTranslations>(
   analysisOpinionTextTranslations
 );
-
-const isHiddenModerated = computed(
-  () =>
-    props.opinionItem.moderation.status === "moderated" &&
-    props.opinionItem.moderation.action === "hide"
+const visibleContent = computed(() =>
+  props.opinionItem.content.status === "visible"
+    ? props.opinionItem.content
+    : undefined
 );
 
-const isMovedToModerationHistory = computed(
-  () =>
-    props.opinionItem.moderation.status === "moderated" &&
-    props.opinionItem.moderation.action === "move"
-);
+const redactedPlaceholder = computed(() => {
+  const content = props.opinionItem.content;
+  if (content.status === "visible") {
+    return undefined;
+  }
+  return content.reason === "statement_deleted"
+    ? t("deletedStatement")
+    : t("moderatedStatement");
+});
 </script>
 
 <style scoped lang="scss">
@@ -75,7 +77,7 @@ const isMovedToModerationHistory = computed(
   gap: 0.5rem;
 }
 
-.moderated-placeholder {
+.redacted-placeholder {
   color: #6d6a74;
   font-style: italic;
 }

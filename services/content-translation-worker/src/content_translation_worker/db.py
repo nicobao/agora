@@ -14,17 +14,21 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from content_translation_worker.events import build_content_translation_event_data
 from content_translation_worker.generated_models import (
+    AnalysisSnapshotOpinion,
     ContentTranslationSourceKind,
     ContentTranslationWork,
     ContentTranslationWorkStatus,
     Conversation,
     ConversationContent,
     ConversationContentTranslation,
+    ConversationViewSnapshot,
     DisplayLanguageCode,
     LanguageDetectionProvider,
     Opinion,
     OpinionContent,
     OpinionContentTranslation,
+    OpinionModeration,
+    OpinionModerationAction,
     Project,
     ProjectContent,
     ProjectContentTranslation,
@@ -41,6 +45,7 @@ from content_translation_worker.generated_models import (
     SurveyQuestionOption,
     SurveyQuestionOptionContent,
     SurveyQuestionOptionContentTranslation,
+    User,
 )
 from content_translation_worker.translation import (
     ContentTranslationProviderError,
@@ -65,37 +70,162 @@ SUPPORTED_SOURCE_KINDS = {
 ALLOWED_TRANSLATED_HTML_TAGS = frozenset(
     {"b", "strong", "i", "em", "strike", "s", "u", "p", "br", "ul", "ol", "li"}
 )
+NUMERIC_CHARACTER_REFERENCE_PATTERN = re.compile(
+    r"&#(?:(?P<decimal>\d+)|[xX](?P<hexadecimal>[\da-fA-F]+));?"
+)
+BIDI_CHARACTER_REFERENCE_PATTERN = re.compile(r"&(?:lrm|rlm);", flags=re.IGNORECASE)
+BASIC_HTML_ENTITY_PATTERN = re.compile(
+    r"&#(?:(?P<decimal>\d+)|[xX](?P<hexadecimal>[\da-fA-F]+));?"
+    r"|&(?P<named>amp|apos|gt|lt|nbsp|quot);",
+    flags=re.IGNORECASE,
+)
+BIDI_CONTROL_CODE_POINTS = {
+    0x061C,
+    0x200E,
+    0x200F,
+    *range(0x202A, 0x202F),
+    *range(0x2066, 0x206A),
+}
 
 
 def create_lease_token() -> uuid.UUID:
     return uuid.uuid4()
 
 
-def sanitize_translated_html(value: str) -> str:
-    return bleach.clean(
-        value,
-        tags=ALLOWED_TRANSLATED_HTML_TAGS,
-        attributes={},
-        strip=True,
+def remove_non_display_control_characters(value: str) -> str:
+    without_literal_controls = "".join(
+        character
+        for character in value
+        if not (
+            ord(character) <= 0x08
+            or 0x0B <= ord(character) <= 0x0C
+            or 0x0E <= ord(character) <= 0x1F
+            or 0x7F <= ord(character) <= 0x9F
+            or ord(character) in BIDI_CONTROL_CODE_POINTS
+        )
+    )
+
+    def remove_encoded_control(match: re.Match[str]) -> str:
+        decimal = match.group("decimal")
+        hexadecimal = match.group("hexadecimal")
+        encoded_code_point = decimal if decimal is not None else hexadecimal
+        if encoded_code_point is None:
+            return match.group(0)
+        normalized_code_point = encoded_code_point.lstrip("0") or "0"
+        if len(normalized_code_point) > 4:
+            return match.group(0)
+        code_point = int(normalized_code_point, 10 if decimal is not None else 16)
+        if (
+            code_point <= 0x08
+            or 0x0B <= code_point <= 0x0C
+            or 0x0E <= code_point <= 0x1F
+            or 0x7F <= code_point <= 0x9F
+            or code_point in BIDI_CONTROL_CODE_POINTS
+        ):
+            return ""
+        return match.group(0)
+
+    return NUMERIC_CHARACTER_REFERENCE_PATTERN.sub(
+        remove_encoded_control,
+        BIDI_CHARACTER_REFERENCE_PATTERN.sub("", without_literal_controls),
     )
 
 
-def html_to_counted_text(value: str) -> str:
-    text_with_newlines = re.sub(r"</p>", "\n", value, flags=re.IGNORECASE)
+def sanitize_translated_html(value: str) -> str:
+    return remove_non_display_control_characters(
+        bleach.clean(
+            remove_non_display_control_characters(value),
+            tags=ALLOWED_TRANSLATED_HTML_TAGS,
+            attributes={},
+            strip=True,
+        )
+    )
+
+
+def _normalize_counted_text(value: str) -> str:
+    return re.sub(r"\n+", "\n", value).strip("\n")
+
+
+def _decode_basic_html_entities(value: str) -> str:
+    named_entities = {
+        "amp": "&",
+        "apos": "'",
+        "gt": ">",
+        "lt": "<",
+        "nbsp": "\xa0",
+        "quot": '"',
+    }
+
+    def decode_entity(match: re.Match[str]) -> str:
+        named = match.group("named")
+        if named is not None:
+            return named_entities[named.lower()]
+        decimal = match.group("decimal")
+        hexadecimal = match.group("hexadecimal")
+        encoded_code_point = decimal if decimal is not None else hexadecimal
+        if encoded_code_point is None:
+            return match.group(0)
+        try:
+            code_point = int(encoded_code_point, 10 if decimal is not None else 16)
+            if code_point > 0x10FFFF or 0xD800 <= code_point <= 0xDFFF:
+                return match.group(0)
+            return chr(code_point)
+        except ValueError:
+            return match.group(0)
+
+    return BASIC_HTML_ENTITY_PATTERN.sub(decode_entity, value)
+
+
+def convert_html_to_counted_text(value: str) -> str:
+    text_with_newlines = re.sub(
+        r"</(?:p|li|div|h[1-6])>",
+        "\n",
+        value,
+        flags=re.IGNORECASE,
+    )
     text_with_newlines = re.sub(
         r"<br\s*/?>",
         "\n",
         text_with_newlines,
         flags=re.IGNORECASE,
     )
-    text_with_newlines = re.sub(r"<p>", "", text_with_newlines, flags=re.IGNORECASE)
     plain_text = bleach.clean(
         text_with_newlines,
         tags=frozenset(),
         attributes={},
         strip=True,
     )
-    return html.unescape(plain_text).removesuffix("\n")
+    return _normalize_counted_text(html.unescape(plain_text))
+
+
+def convert_html_to_counted_text_fallback(value: str) -> str:
+    text_with_newlines = re.sub(
+        r"</(?:p|li|div|h[1-6])>",
+        "\n",
+        value,
+        flags=re.IGNORECASE,
+    )
+    text_with_newlines = re.sub(
+        r"<br\s*/?>",
+        "\n",
+        text_with_newlines,
+        flags=re.IGNORECASE,
+    )
+    plain_text = re.sub(r"<[^>]*>", "", text_with_newlines)
+    plain_text = re.sub(r"<[^>]*$", "", plain_text)
+    return _normalize_counted_text(_decode_basic_html_entities(plain_text))
+
+
+def html_to_counted_text(value: str) -> str:
+    try:
+        return convert_html_to_counted_text(value)
+    except Exception:
+        log.warning(
+            "HTML-to-text conversion failed; using best-effort text (HTML length: %d)",
+            len(value),
+            exc_info=True,
+        )
+        return convert_html_to_counted_text_fallback(value)
 
 
 @dataclass(frozen=True)
@@ -117,6 +247,7 @@ EMPTY_TRANSLATION_SOURCE_METADATA = TranslationSourceMetadata(
 class TranslationSourceDecision:
     source_language_code_for_translation: str | None
     use_google_detected_source: bool
+
 
 CHINESE_SCRIPT_LANGUAGE_CODES = frozenset({"zh-Hans", "zh-CN", "zh-Hant", "zh-TW"})
 CHINESE_DISPLAY_LANGUAGE_CODES = frozenset({"zh-Hans", "zh-Hant"})
@@ -253,10 +384,8 @@ def should_promote_google_source_metadata(
 ) -> bool:
     return (
         source_metadata.source_language_code is not None
-        and source_metadata.source_language_provider
-        == LanguageDetectionProvider.google_translate
-        and current_source_language_provider
-        in {None, LanguageDetectionProvider.lingua}
+        and source_metadata.source_language_provider == LanguageDetectionProvider.google_translate
+        and current_source_language_provider in {None, LanguageDetectionProvider.lingua}
     )
 
 
@@ -279,8 +408,7 @@ def _promote_opinion_source_metadata(
                 OpinionContent.id == source.content_id,
                 or_(
                     OpinionContent.source_language_provider.is_(None),
-                    OpinionContent.source_language_provider
-                    == LanguageDetectionProvider.lingua,
+                    OpinionContent.source_language_provider == LanguageDetectionProvider.lingua,
                 ),
             )
         )
@@ -312,8 +440,7 @@ def _promote_ranking_item_source_metadata(
                 RankingItemContent.id == source.content_id,
                 or_(
                     RankingItemContent.source_language_provider.is_(None),
-                    RankingItemContent.source_language_provider
-                    == LanguageDetectionProvider.lingua,
+                    RankingItemContent.source_language_provider == LanguageDetectionProvider.lingua,
                 ),
             )
         )
@@ -346,7 +473,13 @@ class ClaimedContentTranslationWork:
 @dataclass(frozen=True)
 class ProcessWorkResult:
     work_id: int
-    status: Literal["completed", "failed", "missing_source", "lost_lease"]
+    status: Literal[
+        "completed",
+        "failed",
+        "ineligible_source",
+        "missing_source",
+        "lost_lease",
+    ]
 
 
 class LostContentTranslationWorkLeaseError(RuntimeError):
@@ -399,13 +532,13 @@ def retry_failed_eager_work(
             select(ContentTranslationWork.id)
             .where(
                 and_(
-                    ContentTranslationWork.status
-                    == ContentTranslationWorkStatus.failed,
-                    ContentTranslationWork.priority_rank
-                    == EAGER_VISIBLE_PRIORITY_RANK,
+                    ContentTranslationWork.status == ContentTranslationWorkStatus.failed,
+                    ContentTranslationWork.priority_rank == EAGER_VISIBLE_PRIORITY_RANK,
                     or_(
                         ContentTranslationWork.last_error_code.is_(None),
-                        ContentTranslationWork.last_error_code != "missing_source",
+                        ContentTranslationWork.last_error_code.not_in(
+                            ["missing_source", "ineligible_source"]
+                        ),
                     ),
                     ContentTranslationWork.failed_at.is_not(None),
                     ContentTranslationWork.failed_at <= retry_after,
@@ -453,9 +586,7 @@ def _source_key_for_work_row(row: ContentTranslationWork) -> str | None:
         return f"ranking_item_content:{row.ranking_item_content_id}"
     if row.survey_question_content_id is None or row.survey_question_option_content_ids is None:
         return None
-    option_content_ids = ",".join(
-        str(item) for item in row.survey_question_option_content_ids
-    )
+    option_content_ids = ",".join(str(item) for item in row.survey_question_option_content_ids)
     return f"survey_question:{row.survey_question_content_id}:options:{option_content_ids}"
 
 
@@ -481,8 +612,7 @@ def claim_content_translation_work_batch(
                 ContentTranslationWork.conversation_id.is_not(None),
                 Conversation.current_content_id.is_not(None),
                 or_(
-                    ContentTranslationWork.source_kind
-                    != ContentTranslationSourceKind.conversation,
+                    ContentTranslationWork.source_kind != ContentTranslationSourceKind.conversation,
                     Conversation.current_content_id
                     == ContentTranslationWork.conversation_content_id,
                 ),
@@ -829,6 +959,25 @@ def process_claimed_work(
                 error_message="opinion work is missing opinion_content_id",
             )
             return ProcessWorkResult(work_id=claim.id, status="failed")
+        eligibility = _get_opinion_source_eligibility(
+            session,
+            opinion_content_id=claim.opinion_content_id,
+        )
+        if eligibility != "eligible":
+            log.warning(
+                "[Worker] Ineligible translation source work_id=%d source_kind=opinion "
+                "conversationSlugId=%s conversation_id=%d opinion_content_id=%d reason=%s",
+                claim.id,
+                claim.conversation_slug_id,
+                claim.conversation_id,
+                claim.opinion_content_id,
+                eligibility,
+            )
+            if eligibility == "missing":
+                _mark_missing_source(session, claim=claim)
+                return ProcessWorkResult(work_id=claim.id, status="missing_source")
+            _mark_ineligible_source(session, claim=claim, reason=eligibility)
+            return ProcessWorkResult(work_id=claim.id, status="ineligible_source")
         source = _fetch_opinion_source(session, opinion_content_id=claim.opinion_content_id)
         if source is None:
             log.warning(
@@ -857,11 +1006,31 @@ def process_claimed_work(
             claim=claim,
             source_language_code=source.source_language_code,
         )
+        eligibility = _get_opinion_source_eligibility(
+            session,
+            opinion_content_id=claim.opinion_content_id,
+        )
+        if eligibility != "eligible":
+            if eligibility == "missing":
+                _mark_missing_source(session, claim=claim)
+                return ProcessWorkResult(work_id=claim.id, status="missing_source")
+            _mark_ineligible_source(session, claim=claim, reason=eligibility)
+            return ProcessWorkResult(work_id=claim.id, status="ineligible_source")
         if _has_fresh_opinion_translation(session, claim=claim, source=source):
             _mark_completed(session, claim=claim)
             return ProcessWorkResult(work_id=claim.id, status="completed")
         try:
             with session.begin_nested():
+                eligibility = _get_opinion_source_eligibility(
+                    session,
+                    opinion_content_id=claim.opinion_content_id,
+                )
+                if eligibility != "eligible":
+                    if eligibility == "missing":
+                        _mark_missing_source(session, claim=claim)
+                        return ProcessWorkResult(work_id=claim.id, status="missing_source")
+                    _mark_ineligible_source(session, claim=claim, reason=eligibility)
+                    return ProcessWorkResult(work_id=claim.id, status="ineligible_source")
                 _translate_opinion_source(
                     session,
                     claim=claim,
@@ -925,6 +1094,9 @@ class OpinionSource:
     source_raw_language_code: str | None
     source_language_provider: LanguageDetectionProvider | None
     source_language_confidence: float | None
+
+
+OpinionSourceEligibility = Literal["eligible", "hidden", "deleted_author", "missing"]
 
 
 @dataclass(frozen=True)
@@ -1079,12 +1251,44 @@ def _fetch_opinion_source(
             OpinionContent.source_language_provider,
             OpinionContent.source_language_confidence,
         )
+        .select_from(OpinionContent)
         .join(Opinion, Opinion.id == OpinionContent.opinion_id)
+        .join(User, User.id == Opinion.author_id)
         .join(Conversation, Conversation.id == Opinion.conversation_id)
         .where(
             and_(
                 OpinionContent.id == opinion_content_id,
-                Opinion.current_content_id == OpinionContent.id,
+                Opinion.current_content_id.is_not(None),
+                Conversation.current_content_id.is_not(None),
+                Conversation.is_importing.is_(False),
+                User.is_deleted.is_(False),
+                ~select(OpinionModeration.id)
+                .where(
+                    and_(
+                        OpinionModeration.opinion_id == Opinion.id,
+                        OpinionModeration.moderation_action == OpinionModerationAction.hide,
+                        OpinionModeration.deleted_at.is_(None),
+                    )
+                )
+                .exists(),
+                or_(
+                    Opinion.current_content_id == OpinionContent.id,
+                    select(AnalysisSnapshotOpinion.id)
+                    .join(
+                        ConversationViewSnapshot,
+                        ConversationViewSnapshot.analysis_snapshot_id
+                        == AnalysisSnapshotOpinion.analysis_snapshot_id,
+                    )
+                    .where(
+                        and_(
+                            AnalysisSnapshotOpinion.opinion_content_id == OpinionContent.id,
+                            AnalysisSnapshotOpinion.opinion_id == Opinion.id,
+                            ConversationViewSnapshot.conversation_id == Conversation.id,
+                            ConversationViewSnapshot.activated_at.is_not(None),
+                        )
+                    )
+                    .exists(),
+                ),
             )
         )
         .limit(1)
@@ -1102,6 +1306,40 @@ def _fetch_opinion_source(
         source_language_provider=row.source_language_provider,
         source_language_confidence=row.source_language_confidence,
     )
+
+
+def _get_opinion_source_eligibility(
+    session: Session,
+    *,
+    opinion_content_id: int,
+) -> OpinionSourceEligibility:
+    row = session.execute(
+        select(
+            User.is_deleted,
+            select(OpinionModeration.id)
+            .where(
+                and_(
+                    OpinionModeration.opinion_id == Opinion.id,
+                    OpinionModeration.moderation_action == OpinionModerationAction.hide,
+                    OpinionModeration.deleted_at.is_(None),
+                )
+            )
+            .exists()
+            .label("is_hidden"),
+        )
+        .select_from(OpinionContent)
+        .join(Opinion, Opinion.id == OpinionContent.opinion_id)
+        .join(User, User.id == Opinion.author_id)
+        .where(OpinionContent.id == opinion_content_id)
+        .limit(1)
+    ).one_or_none()
+    if row is None:
+        return "missing"
+    if row.is_deleted:
+        return "deleted_author"
+    if row.is_hidden:
+        return "hidden"
+    return "eligible"
 
 
 def _fetch_survey_question_source(
@@ -1307,8 +1545,7 @@ def _has_fresh_conversation_translation(
         select(ConversationContentTranslation.source_language_code).where(
             and_(
                 ConversationContentTranslation.conversation_content_id == source.content_id,
-                ConversationContentTranslation.display_language_code
-                == claim.display_language_code,
+                ConversationContentTranslation.display_language_code == claim.display_language_code,
             )
         )
     ).first()
@@ -1331,8 +1568,7 @@ def _has_fresh_project_translation(
         ).where(
             and_(
                 ProjectContentTranslation.project_content_id == source.content_id,
-                ProjectContentTranslation.display_language_code
-                == claim.display_language_code,
+                ProjectContentTranslation.display_language_code == claim.display_language_code,
                 ProjectContentTranslation.deleted_at.is_(None),
             )
         )
@@ -1374,8 +1610,7 @@ def _has_fresh_survey_question_translation(
     question_row = session.execute(
         select(SurveyQuestionContentTranslation.source_language_code).where(
             and_(
-                SurveyQuestionContentTranslation.survey_question_content_id
-                == source.content_id,
+                SurveyQuestionContentTranslation.survey_question_content_id == source.content_id,
                 SurveyQuestionContentTranslation.display_language_code
                 == claim.display_language_code,
             )
@@ -1427,8 +1662,7 @@ def _has_fresh_ranking_item_translation(
         select(RankingItemContentTranslation.source_language_code).where(
             and_(
                 RankingItemContentTranslation.ranking_item_content_id == source.content_id,
-                RankingItemContentTranslation.display_language_code
-                == claim.display_language_code,
+                RankingItemContentTranslation.display_language_code == claim.display_language_code,
             )
         )
     ).first()
@@ -1524,9 +1758,7 @@ def _translate_conversation_source(
         )
         body_result_by_language = {
             language_code: result
-            for language_code, result in _results_by_display_language_code(
-                body_results
-            ).items()
+            for language_code, result in _results_by_display_language_code(body_results).items()
         }
 
     for display_language_code, title_result in title_result_by_language.items():
@@ -1685,9 +1917,7 @@ def _translate_project_source(
                 set_={
                     "translated_title": title_result.translated_text,
                     "translated_subtitle": (
-                        subtitle_result.translated_text
-                        if subtitle_result is not None
-                        else None
+                        subtitle_result.translated_text if subtitle_result is not None else None
                     ),
                     "translated_body": translated_body,
                     "translated_body_plain_text": translated_body_plain_text,
@@ -1726,9 +1956,7 @@ def _translate_opinion_source(
         mime_type="text/html",
     )
     for localized_result in translation_results:
-        translated_content = sanitize_translated_html(
-            localized_result.result.translated_text
-        )
+        translated_content = sanitize_translated_html(localized_result.result.translated_text)
         translated_content_plain_text = html_to_counted_text(translated_content)
         source_metadata = build_translation_source_metadata_from_results(
             [localized_result.result],
@@ -1797,7 +2025,7 @@ def _translate_ranking_item_source(
         text_value=source.title,
         source_language_code=source_decision.source_language_code_for_translation,
         target_language_code=claim.display_language_code.value,
-        mime_type="text/plain",
+        mime_type="text/html",
     )
     title_result_by_language = _results_by_display_language_code(title_results)
     body_result_by_language: dict[DisplayLanguageCode, ContentTranslationResult | None] = {
@@ -1818,6 +2046,7 @@ def _translate_ranking_item_source(
         }
 
     for display_language_code, title_result in title_result_by_language.items():
+        translated_title = sanitize_translated_html(title_result.translated_text)
         body_result = body_result_by_language.get(display_language_code)
         translated_body_html = (
             sanitize_translated_html(body_result.translated_text)
@@ -1825,9 +2054,7 @@ def _translate_ranking_item_source(
             else None
         )
         translated_body_plain_text = (
-            html_to_counted_text(translated_body_html)
-            if translated_body_html is not None
-            else None
+            html_to_counted_text(translated_body_html) if translated_body_html is not None else None
         )
         source_metadata = build_translation_source_metadata_from_results(
             [title_result, *([] if body_result is None else [body_result])],
@@ -1845,7 +2072,7 @@ def _translate_ranking_item_source(
         stmt = pg_insert(RankingItemContentTranslation).values(
             ranking_item_content_id=source.content_id,
             display_language_code=display_language_code,
-            translated_title=title_result.translated_text,
+            translated_title=translated_title,
             translated_body_html=translated_body_html,
             translated_body_plain_text=translated_body_plain_text,
             source_language_code=source_metadata.source_language_code,
@@ -1862,7 +2089,7 @@ def _translate_ranking_item_source(
                     RankingItemContentTranslation.display_language_code,
                 ],
                 set_={
-                    "translated_title": title_result.translated_text,
+                    "translated_title": translated_title,
                     "translated_body_html": translated_body_html,
                     "translated_body_plain_text": translated_body_plain_text,
                     "source_language_code": source_metadata.source_language_code,
@@ -1908,9 +2135,7 @@ def _translate_survey_question_source(
             target_language_code=claim.display_language_code.value,
             mime_type="text/plain",
         )
-        option_results_by_id[option.content_id] = _results_by_display_language_code(
-            option_results
-        )
+        option_results_by_id[option.content_id] = _results_by_display_language_code(option_results)
 
     for display_language_code, question_result in question_result_by_language.items():
         if any(
@@ -2112,6 +2337,25 @@ def _mark_missing_source(session: Session, *, claim: ClaimedContentTranslationWo
         claim=claim,
         error_code="missing_source",
         error_message="Source content no longer exists or is not current",
+    )
+
+
+def _mark_ineligible_source(
+    session: Session,
+    *,
+    claim: ClaimedContentTranslationWork,
+    reason: Literal["hidden", "deleted_author"],
+) -> None:
+    error_message = (
+        "Opinion is hidden"
+        if reason == "hidden"
+        else "Opinion author account is deleted"
+    )
+    _mark_failed(
+        session,
+        claim=claim,
+        error_code="ineligible_source",
+        error_message=error_message,
     )
 
 

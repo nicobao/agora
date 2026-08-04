@@ -27,8 +27,9 @@ import {
     voteTable,
 } from "@/shared-backend/schema.js";
 import { scheduleConversationAnalysisRefresh } from "@/shared-backend/conversationCounters.js";
+import { getPrimaryDatabase } from "@/shared-backend/db.js";
 import {
-    enqueueScheduledConversationForMathWork,
+    enqueueConversationForMathWork,
     hasActiveVotesForMathWork,
     hasSurveyResponsesForMathWork,
 } from "@/shared-backend/analysisScheduler.js";
@@ -41,7 +42,8 @@ import {
 import type { Valkey } from "@/shared-backend/valkey.js";
 import { VALKEY_QUEUE_KEYS } from "@/shared-backend/valkeyQueues.js";
 import {
-    htmlToCountedText,
+    countPlainTextCharacters,
+    hasVisiblePlainText,
     PUBLIC_AGGREGATE_SUPPRESSION_THRESHOLD,
 } from "@/shared/shared.js";
 import {
@@ -73,10 +75,12 @@ import {
 } from "@/service/conversationAccess.js";
 import { requireProjectCapability } from "@/service/projectAccess.js";
 import {
+    buildSurveyAggregateResultRows,
     buildSurveyCompletionCounts,
     loadSurveyExportContext,
 } from "./conversationExport/generators/surveyShared.js";
 import { checkConversationParticipation } from "./participationGate.js";
+import { queueConversationSurveyUpdatedEvent } from "./realtimeEventOutbox.js";
 import {
     getDescriptionTextsByGroupId,
     getSelectedOpinionGroupCandidate,
@@ -99,7 +103,10 @@ import {
 } from "./conversationLanguage.js";
 import { getConversationMultilingualSetting } from "./conversationMultilingual.js";
 import type { SurveyQuestionContentSource } from "./contentTranslation.js";
-import { normalizeUserRichTextInput } from "./richText.js";
+import {
+    htmlToCountedTextWithWarning,
+    normalizeUserRichTextInput,
+} from "./richText.js";
 
 interface ConversationAccessContext {
     conversationId: number;
@@ -183,25 +190,38 @@ interface SurveyGateDetails extends InternalSurveyGateSummary {
     staleRequiredQuestionCount: number;
 }
 
-interface SurveyAnalysisRefreshContext {
+interface SurveyAnalysisRefreshContextBase {
     conversationId: number;
     slugId: string;
+}
+
+export type SurveyAnalysisRefreshContext = SurveyAnalysisRefreshContextBase &
+    (
+        | { conversationType: "polis" }
+        | { conversationType: "ranking" }
+    );
+
+export function buildSurveyAnalysisRefreshContext({
+    conversationId,
+    slugId,
+    conversationType,
+    rankingMode,
+}: SurveyAnalysisRefreshContextBase & {
     conversationType: ConversationType;
     rankingMode: RankingMode | null;
+}): SurveyAnalysisRefreshContext {
+    if (conversationType === "polis") {
+        return { conversationId, slugId, conversationType };
+    }
+    if (rankingMode === null) {
+        throw httpErrors.internalServerError(
+            "Ranking conversation is missing its ranking mode",
+        );
+    }
+    return { conversationId, slugId, conversationType };
 }
 
-function isMaxdiffConversation({
-    conversation,
-}: {
-    conversation: SurveyAnalysisRefreshContext;
-}): boolean {
-    return (
-        conversation.conversationType === "ranking" &&
-        conversation.rankingMode === "bws"
-    );
-}
-
-async function markMaxdiffConversationDirty({
+async function markRankingConversationDirty({
     conversationId,
     conversationSlugId,
     valkey,
@@ -227,22 +247,29 @@ async function markMaxdiffConversationDirty({
     }
 }
 
-async function refreshConversationAnalysisForSurveyChange({
+async function lockConversationForSurveyConfigUpdate({
+    db,
+    conversationId,
+}: {
+    db: PostgresJsDatabase;
+    conversationId: number;
+}): Promise<void> {
+    await db
+        .select({ id: conversationTable.id })
+        .from(conversationTable)
+        .where(eq(conversationTable.id, conversationId))
+        .for("no key update", { of: conversationTable });
+}
+
+export async function scheduleConversationAnalysisForSurveyChange({
     db,
     conversation,
-    valkey,
 }: {
     db: PostgresJsDatabase;
     conversation: SurveyAnalysisRefreshContext;
-    valkey: Valkey | undefined;
-}): Promise<void> {
-    if (isMaxdiffConversation({ conversation })) {
-        await markMaxdiffConversationDirty({
-            conversationId: conversation.conversationId,
-            conversationSlugId: conversation.slugId,
-            valkey,
-        });
-        return;
+}): Promise<boolean> {
+    if (conversation.conversationType === "ranking") {
+        return true;
     }
 
     const hasActiveVotes = await hasActiveVotesForMathWork({
@@ -257,7 +284,7 @@ async function refreshConversationAnalysisForSurveyChange({
         log.info(
             `[Survey] Skipping math work schedule for survey change without active inputs conversationId=${String(conversation.conversationId)} conversationSlugId=${conversation.slugId}`,
         );
-        return;
+        return false;
     }
 
     await scheduleConversationAnalysisRefresh({
@@ -266,10 +293,31 @@ async function refreshConversationAnalysisForSurveyChange({
         log,
         queueStrategy: "caller_will_enqueue",
     });
-    await enqueueScheduledConversationForMathWork({
-        db,
+    return true;
+}
+
+export async function wakeScheduledConversationAnalysisForSurveyChange({
+    conversation,
+    valkey,
+}: {
+    conversation: SurveyAnalysisRefreshContext;
+    valkey: Valkey | undefined;
+}): Promise<void> {
+    if (conversation.conversationType === "ranking") {
+        await markRankingConversationDirty({
+            conversationId: conversation.conversationId,
+            conversationSlugId: conversation.slugId,
+            valkey,
+        });
+        return;
+    }
+
+    enqueueConversationForMathWork({
         valkey,
-        conversationId: conversation.conversationId,
+        schedule: {
+            conversationId: conversation.conversationId,
+            conversationSlugId: conversation.slugId,
+        },
         log,
     });
 }
@@ -283,7 +331,7 @@ async function hasParticipantAnalysisInput({
     conversation: SurveyAnalysisRefreshContext;
     participantId: string;
 }): Promise<boolean> {
-    if (isMaxdiffConversation({ conversation })) {
+    if (conversation.conversationType === "ranking") {
         const rows = await db
             .select({ id: maxdiffResultTable.id })
             .from(maxdiffResultTable)
@@ -329,21 +377,19 @@ async function hasParticipantAnalysisInput({
     return rows.length > 0;
 }
 
-async function refreshConversationAnalysisForParticipantSurveyTransition({
+async function scheduleConversationAnalysisForParticipantSurveyTransition({
     db,
     conversation,
     participantId,
     previousSurveyGateStatus,
     nextSurveyGateStatus,
-    valkey,
 }: {
     db: PostgresJsDatabase;
     conversation: SurveyAnalysisRefreshContext;
     participantId: string;
     previousSurveyGateStatus: InternalSurveyGateStatus;
     nextSurveyGateStatus: InternalSurveyGateStatus;
-    valkey: Valkey | undefined;
-}): Promise<void> {
+}): Promise<boolean> {
     const hasAnalysisInput = await hasParticipantAnalysisInput({
         db,
         conversation,
@@ -354,16 +400,15 @@ async function refreshConversationAnalysisForParticipantSurveyTransition({
         log.info(
             `[Survey] Skipped analysis refresh for survey transition without participant input conversationId=${String(conversation.conversationId)} conversationSlugId=${conversation.slugId} conversationType=${conversation.conversationType} participantId=${participantId} previousSurveyGateStatus=${previousSurveyGateStatus} nextSurveyGateStatus=${nextSurveyGateStatus}`,
         );
-        return;
+        return false;
     }
 
     log.info(
         `[Survey] Scheduling analysis refresh for participant survey transition conversationId=${String(conversation.conversationId)} conversationSlugId=${conversation.slugId} conversationType=${conversation.conversationType} participantId=${participantId} previousSurveyGateStatus=${previousSurveyGateStatus} nextSurveyGateStatus=${nextSurveyGateStatus}`,
     );
-    await refreshConversationAnalysisForSurveyChange({
+    return await scheduleConversationAnalysisForSurveyChange({
         db,
         conversation,
-        valkey,
     });
 }
 
@@ -438,10 +483,10 @@ export interface StoredSurveyAnswer {
 function getStoredSurveyAnswerPlainText(
     storedAnswer: StoredSurveyAnswer,
 ): string {
-    return (
-        storedAnswer.textValuePlainText ??
-        htmlToCountedText(storedAnswer.textValueHtml ?? "")
-    );
+    return htmlToCountedTextWithWarning({
+        html: storedAnswer.textValueHtml ?? "",
+        context: "stored survey answer",
+    });
 }
 
 function isStoredSurveyAnswerPassed({
@@ -457,7 +502,7 @@ function isStoredSurveyAnswerPassed({
 
     return (
         storedAnswer.optionSlugIds.length === 0 &&
-        getStoredSurveyAnswerPlainText(storedAnswer).length === 0
+        !hasVisiblePlainText(getStoredSurveyAnswerPlainText(storedAnswer))
     );
 }
 
@@ -685,7 +730,7 @@ export function validateSurveyAnswer({
     answer,
 }: {
     question: ActiveSurveyQuestionRecord;
-    answer: SurveyAnswerSubmission;
+    answer: SurveyAnswerDraft;
 }): boolean {
     if (question.questionType !== answer.questionType) {
         return false;
@@ -711,9 +756,12 @@ export function validateSurveyAnswer({
                 return false;
             }
 
-            const characterCount = answer.textValuePlainText.length;
+            const characterCount = countPlainTextCharacters(
+                answer.textValuePlainText,
+            ).characterCount;
             const effectiveMinLength = Math.max(minPlainTextLength ?? 0, 1);
             return (
+                hasVisiblePlainText(answer.textValuePlainText) &&
                 characterCount >= effectiveMinLength &&
                 characterCount <= maxPlainTextLength
             );
@@ -758,7 +806,7 @@ function normalizeSurveyAnswerForStorage({
 }: {
     question: ActiveSurveyQuestionRecord;
     answer: SurveyAnswerSubmission;
-}): SurveyAnswerSubmission {
+}): SurveyAnswerDraft {
     if (answer.questionType !== "free_text") {
         return answer;
     }
@@ -776,9 +824,7 @@ function normalizeSurveyAnswerForStorage({
     try {
         const normalizationResult = normalizeUserRichTextInput({
             html: answer.textValueHtml,
-            plainText: answer.textValuePlainText,
-            logLabel:
-                "[SurveyAnswerPlainText] Frontend/backend plain text mismatch",
+            validationMode: "survey",
         });
         if (!normalizationResult.success) {
             throw httpErrors.badRequest(normalizationResult.reason);
@@ -2449,11 +2495,57 @@ export async function fetchSurveyAggregatedResults({
         db,
         conversationSlugId,
     });
+    if (conversation.conversationType === "ranking") {
+        const primaryDb = getPrimaryDatabase(db);
+        const accessLevel = await getConversationViewAccessLevelForConversation({
+            db: primaryDb,
+            userId,
+            projectId: conversation.projectId,
+        });
+        const context = await primaryDb.transaction(
+            async (tx) =>
+                await loadSurveyExportContext({
+                    db: tx,
+                    conversationId: conversation.conversationId,
+                    conversationType: conversation.conversationType,
+                    includeClusterMemberships: false,
+                }),
+            { isolationLevel: "repeatable read", accessMode: "read only" },
+        );
+        if (context.activeSurveyConfig === undefined) {
+            return {
+                hasSurvey: false,
+                accessLevel,
+                suppressionThreshold: PUBLIC_AGGREGATE_SUPPRESSION_THRESHOLD,
+                suppressedRows: [],
+                fullRows: undefined,
+            };
+        }
+
+        const aggregateRows = buildSurveyAggregateResultRows({
+            context,
+            includeFullRows: accessLevel === "owner",
+        });
+
+        return {
+            hasSurvey: true,
+            accessLevel,
+            suppressionThreshold: PUBLIC_AGGREGATE_SUPPRESSION_THRESHOLD,
+            suppressedRows: aggregateRows.suppressedRows,
+            fullRows:
+                accessLevel === "owner" &&
+                aggregateRows.hasPublicAggregateSuppressionEnabled
+                    ? aggregateRows.fullRows
+                    : undefined,
+        };
+    }
+
     const accessLevel = await getConversationViewAccessLevelForConversation({
         db,
         userId,
         projectId: conversation.projectId,
     });
+
     const activeSurveyConfig = await getActiveSurveyConfigRecord({
         db,
         conversationId: conversation.conversationId,
@@ -2565,6 +2657,7 @@ export async function fetchSurveyCompletionCounts({
     const context = await loadSurveyExportContext({
         db,
         conversationId: conversation.conversationId,
+        conversationType: conversation.conversationType,
     });
 
     return {
@@ -2621,12 +2714,12 @@ export async function saveSurveyAnswer({
     }
 
     const participantId = participationCheck.participantId;
-    const conversation = {
+    const conversation = buildSurveyAnalysisRefreshContext({
         conversationId: participationCheck.conversationId,
         slugId: conversationSlugId,
         conversationType: participationCheck.conversationType,
         rankingMode: participationCheck.rankingMode,
-    };
+    });
 
     const previousSurveyState = await loadSurveyParticipantState({
         db,
@@ -2675,6 +2768,7 @@ export async function saveSurveyAnswer({
     }): Promise<{
         nextSurveyState: SurveyParticipantState;
         nextSurveyGate: SurveyGateDetails;
+        analysisRefreshScheduled: boolean;
     }> => {
         const nextSurveyState = await loadSurveyParticipantState({
             db: transactionDb,
@@ -2696,7 +2790,28 @@ export async function saveSurveyAnswer({
                 .where(eq(surveyResponseTable.id, nextSurveyState.response.id));
         }
 
-        return { nextSurveyState, nextSurveyGate };
+        await queueConversationSurveyUpdatedEvent({
+            db: transactionDb,
+            conversationSlugId,
+            configChanged: false,
+        });
+
+        const analysisRefreshScheduled =
+            shouldRecomputeAnalysisForSurveyTransition({
+                previousSurveyGateStatus: previousSurveyGate.status,
+                nextSurveyGateStatus: nextSurveyGate.status,
+                isOptional: activeSurveyConfig.isOptional,
+            })
+                ? await scheduleConversationAnalysisForParticipantSurveyTransition({
+                      db: transactionDb,
+                      conversation,
+                      participantId,
+                      previousSurveyGateStatus: previousSurveyGate.status,
+                      nextSurveyGateStatus: nextSurveyGate.status,
+                  })
+                : false;
+
+        return { nextSurveyState, nextSurveyGate, analysisRefreshScheduled };
     };
 
     const surveyTransition = await db.transaction(async (tx) => {
@@ -2919,24 +3034,14 @@ export async function saveSurveyAnswer({
         return await loadNextSurveyTransition({ db: tx });
     });
 
-    const { nextSurveyGate } = surveyTransition;
+    const { nextSurveyGate, analysisRefreshScheduled } = surveyTransition;
     const justCompleted =
         previousSurveyGate.status !== "complete_valid" &&
         nextSurveyGate.status === "complete_valid";
 
-    if (
-        shouldRecomputeAnalysisForSurveyTransition({
-            previousSurveyGateStatus: previousSurveyGate.status,
-            nextSurveyGateStatus: nextSurveyGate.status,
-            isOptional: activeSurveyConfig.isOptional,
-        })
-    ) {
-        await refreshConversationAnalysisForParticipantSurveyTransition({
-            db,
+    if (analysisRefreshScheduled) {
+        await wakeScheduledConversationAnalysisForSurveyChange({
             conversation,
-            participantId,
-            previousSurveyGateStatus: previousSurveyGate.status,
-            nextSurveyGateStatus: nextSurveyGate.status,
             valkey,
         });
     }
@@ -2988,12 +3093,12 @@ export async function withdrawSurveyResponse({
     }
 
     const participantId = participationCheck.participantId;
-    const conversation = {
+    const conversation = buildSurveyAnalysisRefreshContext({
         conversationId: participationCheck.conversationId,
         slugId: conversationSlugId,
         conversationType: participationCheck.conversationType,
         rankingMode: participationCheck.rankingMode,
-    };
+    });
 
     const previousSurveyState = await loadSurveyParticipantState({
         db,
@@ -3004,7 +3109,8 @@ export async function withdrawSurveyResponse({
         surveyState: previousSurveyState,
         participantId,
     });
-    if (previousSurveyState.activeSurveyConfig === undefined) {
+    const activeSurveyConfig = previousSurveyState.activeSurveyConfig;
+    if (activeSurveyConfig === undefined) {
         throw httpErrors.notFound("Survey not found");
     }
     if (previousSurveyState.response === undefined) {
@@ -3036,24 +3142,33 @@ export async function withdrawSurveyResponse({
             surveyState: nextSurveyState,
             participantId,
         });
-        return { nextSurveyGate };
+        await queueConversationSurveyUpdatedEvent({
+            db: tx,
+            conversationSlugId,
+            configChanged: false,
+        });
+        const analysisRefreshScheduled =
+            shouldRecomputeAnalysisForSurveyTransition({
+                previousSurveyGateStatus: previousSurveyGate.status,
+                nextSurveyGateStatus: nextSurveyGate.status,
+                isOptional: activeSurveyConfig.isOptional,
+            })
+                ? await scheduleConversationAnalysisForParticipantSurveyTransition({
+                      db: tx,
+                      conversation,
+                      participantId,
+                      previousSurveyGateStatus: previousSurveyGate.status,
+                      nextSurveyGateStatus: nextSurveyGate.status,
+                  })
+                : false;
+        return { nextSurveyGate, analysisRefreshScheduled };
     });
 
-    const { nextSurveyGate } = surveyTransition;
+    const { nextSurveyGate, analysisRefreshScheduled } = surveyTransition;
 
-    if (
-        shouldRecomputeAnalysisForSurveyTransition({
-            previousSurveyGateStatus: previousSurveyGate.status,
-            nextSurveyGateStatus: nextSurveyGate.status,
-            isOptional: previousSurveyState.activeSurveyConfig.isOptional,
-        })
-    ) {
-        await refreshConversationAnalysisForParticipantSurveyTransition({
-            db,
+    if (analysisRefreshScheduled) {
+        await wakeScheduledConversationAnalysisForSurveyChange({
             conversation,
-            participantId,
-            previousSurveyGateStatus: previousSurveyGate.status,
-            nextSurveyGateStatus: nextSurveyGate.status,
             valkey,
         });
     }
@@ -3112,8 +3227,18 @@ export async function updateSurveyConfigByAuthor({
         db,
         conversationId: conversation.conversationId,
     });
+    const analysisRefreshContext = buildSurveyAnalysisRefreshContext({
+        conversationId: conversation.conversationId,
+        slugId: conversation.slugId,
+        conversationType: conversation.conversationType,
+        rankingMode: conversation.rankingMode,
+    });
 
     const surveyConfigUpdate = await db.transaction(async (tx) => {
+        await lockConversationForSurveyConfigUpdate({
+            db: tx,
+            conversationId: conversation.conversationId,
+        });
         const surveyConfigUpdateEffect = await setSurveyConfigForConversation({
             db: tx,
             conversationSlugId,
@@ -3133,8 +3258,20 @@ export async function updateSurveyConfigByAuthor({
             throw httpErrors.internalServerError("Survey config was not persisted");
         }
 
+        await queueConversationSurveyUpdatedEvent({
+            db: tx,
+            conversationSlugId,
+            configChanged: true,
+        });
+        const analysisRefreshScheduled =
+            shouldRecomputeAnalysisForSurveyConfigChange(surveyConfigUpdateEffect) &&
+            (await scheduleConversationAnalysisForSurveyChange({
+                db: tx,
+                conversation: analysisRefreshContext,
+            }));
+
         return {
-            surveyConfigUpdateEffect,
+            analysisRefreshScheduled,
             currentRevision: activeSurveyConfig.currentRevision,
             surveyGate: await getSurveyGateSummary({
                 db: tx,
@@ -3144,14 +3281,9 @@ export async function updateSurveyConfigByAuthor({
         };
     });
 
-    if (
-        shouldRecomputeAnalysisForSurveyConfigChange(
-            surveyConfigUpdate.surveyConfigUpdateEffect,
-        )
-    ) {
-        await refreshConversationAnalysisForSurveyChange({
-            db,
-            conversation,
+    if (surveyConfigUpdate.analysisRefreshScheduled) {
+        await wakeScheduledConversationAnalysisForSurveyChange({
+            conversation: analysisRefreshContext,
             valkey,
         });
     }
@@ -3188,7 +3320,17 @@ export async function deleteSurveyConfigByAuthor({
         capability: "conversation_update",
         message: "Missing conversation_update capability",
     });
+    const analysisRefreshContext = buildSurveyAnalysisRefreshContext({
+        conversationId: conversation.conversationId,
+        slugId: conversation.slugId,
+        conversationType: conversation.conversationType,
+        rankingMode: conversation.rankingMode,
+    });
     const surveyConfigDeleteResult = await db.transaction(async (tx) => {
+        await lockConversationForSurveyConfigUpdate({
+            db: tx,
+            conversationId: conversation.conversationId,
+        });
         const surveyConfigUpdateEffect = await setSurveyConfigForConversation({
             db: tx,
             conversationSlugId,
@@ -3196,9 +3338,20 @@ export async function deleteSurveyConfigByAuthor({
             surveyConfig: null,
             now,
         });
+        await queueConversationSurveyUpdatedEvent({
+            db: tx,
+            conversationSlugId,
+            configChanged: true,
+        });
+        const analysisRefreshScheduled =
+            shouldRecomputeAnalysisForSurveyConfigChange(surveyConfigUpdateEffect) &&
+            (await scheduleConversationAnalysisForSurveyChange({
+                db: tx,
+                conversation: analysisRefreshContext,
+            }));
 
         return {
-            surveyConfigUpdateEffect,
+            analysisRefreshScheduled,
             surveyGate: await getSurveyGateSummary({
                 db: tx,
                 conversationId: conversation.conversationId,
@@ -3207,14 +3360,9 @@ export async function deleteSurveyConfigByAuthor({
         };
     });
 
-    if (
-        shouldRecomputeAnalysisForSurveyConfigChange(
-            surveyConfigDeleteResult.surveyConfigUpdateEffect,
-        )
-    ) {
-        await refreshConversationAnalysisForSurveyChange({
-            db,
-            conversation,
+    if (surveyConfigDeleteResult.analysisRefreshScheduled) {
+        await wakeScheduledConversationAnalysisForSurveyChange({
+            conversation: analysisRefreshContext,
             valkey,
         });
     }

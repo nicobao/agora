@@ -133,6 +133,7 @@ import type { LinkType, RarimoStatusAttributes } from "src/shared/types/zod";
 import { useAuthenticationStore } from "src/stores/authentication";
 import { api } from "src/utils/api/client";
 import { useCommonApi } from "src/utils/api/common";
+import { getAuthenticationStartKeyAction } from "src/utils/auth/authKeyAction";
 import { buildAuthorizationHeader } from "src/utils/crypto/ucan/operation";
 import { useNotify } from "src/utils/ui/notify";
 import { onMounted, ref, watch } from "vue";
@@ -181,7 +182,9 @@ const rarimoStoreLink = ref("");
 
 const verificationLinkGenerationFailed = ref(false);
 
-const { isAuthInitialized } = storeToRefs(useAuthenticationStore());
+const { isAuthInitialized, isKnown, isRegistered, isLoggedIn } = storeToRefs(
+  useAuthenticationStore()
+);
 
 if (quasar.platform.is.android) {
   rarimoStoreLink.value =
@@ -225,7 +228,15 @@ async function generateVerificationLink() {
       await DefaultApiAxiosParamCreator().apiV1AuthZkpGenerateVerificationLinkPost(
         params
       );
-    const encodedUcan = await buildEncodedUcan(url, options);
+    const encodedUcan = await buildEncodedUcan(
+      url,
+      options,
+      getAuthenticationStartKeyAction({
+        isKnown: isKnown.value,
+        isRegistered: isRegistered.value,
+        isLoggedIn: isLoggedIn.value,
+      })
+    );
     const response = await DefaultApiFactory(
       undefined,
       undefined,
@@ -256,10 +267,6 @@ async function generateVerificationLink() {
         case "already_has_credential":
           terminateFlow();
           qrcodeVerificationStatus.value = "verified";
-          break;
-        case "associated_with_another_user":
-          terminateFlow();
-          showNotifyMessage(t("credentialAlreadyLinked"));
           break;
       }
     }

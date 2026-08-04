@@ -269,7 +269,6 @@ export interface ApiV1AdministratorProjectCreatePostRequest {
     'ownerOrganizationSlugs': Array<string>;
     'subtitle'?: string;
     'body'?: string;
-    'bodyPlainText'?: string;
     'bannerPath'?: string;
     'bannerIsFullPath'?: boolean;
     'contentLocalizations'?: Array<ApiV1AdministratorProjectCreatePostRequestContentLocalizationsInner>;
@@ -362,7 +361,6 @@ export interface ApiV1AdministratorProjectCreatePostRequestContentLocalizationsI
     'projectTitle'?: string;
     'subtitle'?: string;
     'body'?: string;
-    'bodyPlainText'?: string;
     'bannerPath'?: string;
     'bannerIsFullPath'?: boolean;
 }
@@ -553,9 +551,9 @@ export interface ApiV1AdministratorProjectGetAllProjectsPost200ResponseProjectLi
     'projectTitle'?: string;
     'subtitle'?: string;
     'body'?: string;
-    'bodyPlainText'?: string;
     'bannerPath'?: string;
     'bannerIsFullPath': boolean;
+    'bodyPlainText'?: string;
 }
 
 export const ApiV1AdministratorProjectGetAllProjectsPost200ResponseProjectListInnerContentLocalizationsInnerLanguageCodeEnum = {
@@ -658,7 +656,6 @@ export interface ApiV1AdministratorProjectUpdatePostRequest {
     'ownerOrganizationSlugs': Array<string>;
     'subtitle'?: string;
     'body'?: string;
-    'bodyPlainText'?: string;
     'bannerPath'?: string;
     'bannerIsFullPath'?: boolean;
     'contentLocalizations'?: Array<ApiV1AdministratorProjectCreatePostRequestContentLocalizationsInner>;
@@ -701,9 +698,9 @@ export interface ApiV1AuthAuthenticatePost200ResponseOneOf1OneOf1 {
 
 export const ApiV1AuthAuthenticatePost200ResponseOneOf1OneOf1ReasonEnum = {
     AlreadyHasCredential: 'already_has_credential',
-    AssociatedWithAnotherUser: 'associated_with_another_user',
     InvalidPhoneNumber: 'invalid_phone_number',
     RestrictedPhoneType: 'restricted_phone_type',
+    PhoneAuthUnavailable: 'phone_auth_unavailable',
 } as const;
 
 export type ApiV1AuthAuthenticatePost200ResponseOneOf1OneOf1ReasonEnum = typeof ApiV1AuthAuthenticatePost200ResponseOneOf1OneOf1ReasonEnum[keyof typeof ApiV1AuthAuthenticatePost200ResponseOneOf1OneOf1ReasonEnum];
@@ -944,7 +941,6 @@ export interface ApiV1AuthEmailAuthenticatePost200ResponseOneOfOneOf {
 
 export const ApiV1AuthEmailAuthenticatePost200ResponseOneOfOneOfReasonEnum = {
     AlreadyHasCredential: 'already_has_credential',
-    AssociatedWithAnotherUser: 'associated_with_another_user',
     Unreachable: 'unreachable',
     Disposable: 'disposable',
 } as const;
@@ -955,6 +951,30 @@ export interface ApiV1AuthEmailAuthenticatePostRequest {
     'email': string;
     'isRequestingNewCode': boolean;
 }
+/**
+ * @type ApiV1AuthEmailVerifyOtpPost200Response
+ */
+export type ApiV1AuthEmailVerifyOtpPost200Response = ApiV1AuthEmailVerifyOtpPost200ResponseOneOf | ApiV1AuthPhoneVerifyOtpPost200ResponseOneOf;
+
+/**
+ * @type ApiV1AuthEmailVerifyOtpPost200ResponseOneOf
+ */
+export type ApiV1AuthEmailVerifyOtpPost200ResponseOneOf = ApiV1AuthEmailVerifyOtpPost200ResponseOneOfOneOf | ApiV1AuthPhoneVerifyOtpPost200ResponseOneOf1OneOf;
+
+export interface ApiV1AuthEmailVerifyOtpPost200ResponseOneOfOneOf {
+    'success': boolean;
+    'reason': ApiV1AuthEmailVerifyOtpPost200ResponseOneOfOneOfReasonEnum;
+}
+
+export const ApiV1AuthEmailVerifyOtpPost200ResponseOneOfOneOfReasonEnum = {
+    ExpiredCode: 'expired_code',
+    WrongGuess: 'wrong_guess',
+    AlreadyHasCredential: 'already_has_credential',
+    VerificationFailed: 'verification_failed',
+} as const;
+
+export type ApiV1AuthEmailVerifyOtpPost200ResponseOneOfOneOfReasonEnum = typeof ApiV1AuthEmailVerifyOtpPost200ResponseOneOfOneOfReasonEnum[keyof typeof ApiV1AuthEmailVerifyOtpPost200ResponseOneOfOneOfReasonEnum];
+
 export interface ApiV1AuthEmailVerifyOtpPostRequest {
     'code': number;
     'email': string;
@@ -995,8 +1015,9 @@ export const ApiV1AuthPhoneVerifyOtpPost200ResponseOneOf1OneOf1ReasonEnum = {
     ExpiredCode: 'expired_code',
     WrongGuess: 'wrong_guess',
     AlreadyHasCredential: 'already_has_credential',
-    AssociatedWithAnotherUser: 'associated_with_another_user',
-    AuthStateChanged: 'auth_state_changed',
+    VerificationFailed: 'verification_failed',
+    PhoneAuthUnavailable: 'phone_auth_unavailable',
+    PhoneRegistrationUnavailable: 'phone_registration_unavailable',
 } as const;
 
 export type ApiV1AuthPhoneVerifyOtpPost200ResponseOneOf1OneOf1ReasonEnum = typeof ApiV1AuthPhoneVerifyOtpPost200ResponseOneOf1OneOf1ReasonEnum[keyof typeof ApiV1AuthPhoneVerifyOtpPost200ResponseOneOf1OneOf1ReasonEnum];
@@ -1167,17 +1188,40 @@ export const ApiV1AuthPhoneVerifyOtpPostRequestDefaultCallingCodeEnum = {
 
 export type ApiV1AuthPhoneVerifyOtpPostRequestDefaultCallingCodeEnum = typeof ApiV1AuthPhoneVerifyOtpPostRequestDefaultCallingCodeEnum[keyof typeof ApiV1AuthPhoneVerifyOtpPostRequestDefaultCallingCodeEnum];
 
+export interface ApiV1AuthSessionsListPost200Response {
+    'currentSession': ApiV1AuthSessionsListPost200ResponseCurrentSession;
+    'otherSessions': Array<ApiV1AuthSessionsListPost200ResponseCurrentSession>;
+}
+export interface ApiV1AuthSessionsListPost200ResponseCurrentSession {
+    'didWrite': string;
+    'startedAt': string;
+    'expiresAt': string;
+}
+export interface ApiV1AuthSessionsLogoutAllPost200Response {
+    'revokedSessionCount': number;
+}
+export interface ApiV1AuthSessionsRevokePost200Response {
+    'revoked': boolean;
+}
+export interface ApiV1AuthSessionsRevokePostRequest {
+    'didWrite': string;
+}
 /**
  * @type ApiV1AuthTicketVerifyPost200Response
  */
-export type ApiV1AuthTicketVerifyPost200Response = ApiV1AuthPhoneVerifyOtpPost200ResponseOneOf | ApiV1AuthTicketVerifyPost200ResponseOneOf;
+export type ApiV1AuthTicketVerifyPost200Response = ApiV1AuthTicketVerifyPost200ResponseOneOf | ApiV1AuthTicketVerifyPost200ResponseOneOf1;
 
 export interface ApiV1AuthTicketVerifyPost200ResponseOneOf {
     'success': boolean;
-    'reason': ApiV1AuthTicketVerifyPost200ResponseOneOfReasonEnum;
+    'accountMerged': boolean;
+    'userId': string;
+}
+export interface ApiV1AuthTicketVerifyPost200ResponseOneOf1 {
+    'success': boolean;
+    'reason': ApiV1AuthTicketVerifyPost200ResponseOneOf1ReasonEnum;
 }
 
-export const ApiV1AuthTicketVerifyPost200ResponseOneOfReasonEnum = {
+export const ApiV1AuthTicketVerifyPost200ResponseOneOf1ReasonEnum = {
     DeserializationError: 'deserialization_error',
     InvalidProof: 'invalid_proof',
     InvalidSigner: 'invalid_signer',
@@ -1185,7 +1229,7 @@ export const ApiV1AuthTicketVerifyPost200ResponseOneOfReasonEnum = {
     TicketAlreadyUsed: 'ticket_already_used',
 } as const;
 
-export type ApiV1AuthTicketVerifyPost200ResponseOneOfReasonEnum = typeof ApiV1AuthTicketVerifyPost200ResponseOneOfReasonEnum[keyof typeof ApiV1AuthTicketVerifyPost200ResponseOneOfReasonEnum];
+export type ApiV1AuthTicketVerifyPost200ResponseOneOf1ReasonEnum = typeof ApiV1AuthTicketVerifyPost200ResponseOneOf1ReasonEnum[keyof typeof ApiV1AuthTicketVerifyPost200ResponseOneOf1ReasonEnum];
 
 export interface ApiV1AuthTicketVerifyPostRequest {
     'proof': any;
@@ -1214,7 +1258,6 @@ export interface ApiV1AuthZkpGenerateVerificationLinkPost200ResponseOneOf1 {
 
 export const ApiV1AuthZkpGenerateVerificationLinkPost200ResponseOneOf1ReasonEnum = {
     AlreadyHasCredential: 'already_has_credential',
-    AssociatedWithAnotherUser: 'associated_with_another_user',
 } as const;
 
 export type ApiV1AuthZkpGenerateVerificationLinkPost200ResponseOneOf1ReasonEnum = typeof ApiV1AuthZkpGenerateVerificationLinkPost200ResponseOneOf1ReasonEnum[keyof typeof ApiV1AuthZkpGenerateVerificationLinkPost200ResponseOneOf1ReasonEnum];
@@ -1277,6 +1320,18 @@ export const ApiV1AuthZkpVerifyUserStatusAndAuthenticatePost200ResponseAnyOf1Rar
 } as const;
 
 export type ApiV1AuthZkpVerifyUserStatusAndAuthenticatePost200ResponseAnyOf1RarimoStatusEnum = typeof ApiV1AuthZkpVerifyUserStatusAndAuthenticatePost200ResponseAnyOf1RarimoStatusEnum[keyof typeof ApiV1AuthZkpVerifyUserStatusAndAuthenticatePost200ResponseAnyOf1RarimoStatusEnum];
+
+export interface ApiV1AuthZkpVerifyUserStatusAndAuthenticatePost200ResponseAnyOf2 {
+    'success': boolean;
+    'reason': ApiV1AuthZkpVerifyUserStatusAndAuthenticatePost200ResponseAnyOf2ReasonEnum;
+}
+
+export const ApiV1AuthZkpVerifyUserStatusAndAuthenticatePost200ResponseAnyOf2ReasonEnum = {
+    AlreadyHasCredential: 'already_has_credential',
+    AssociatedWithAnotherUser: 'associated_with_another_user',
+} as const;
+
+export type ApiV1AuthZkpVerifyUserStatusAndAuthenticatePost200ResponseAnyOf2ReasonEnum = typeof ApiV1AuthZkpVerifyUserStatusAndAuthenticatePost200ResponseAnyOf2ReasonEnum[keyof typeof ApiV1AuthZkpVerifyUserStatusAndAuthenticatePost200ResponseAnyOf2ReasonEnum];
 
 export interface ApiV1ContentTranslationRequestPost200Response {
     'success': boolean;
@@ -2365,6 +2420,7 @@ export interface ApiV1ContentTranslationRequestPostRequestSubjectOneOf1 {
     'kind': ApiV1ContentTranslationRequestPostRequestSubjectOneOf1KindEnum;
     'conversationSlugId': string;
     'opinionSlugId': string;
+    'sourceVersion': string;
 }
 
 export const ApiV1ContentTranslationRequestPostRequestSubjectOneOf1KindEnum = {
@@ -2388,6 +2444,7 @@ export type ApiV1ContentTranslationRequestPostRequestSubjectOneOf2KindEnum = typ
 export interface ApiV1ContentTranslationRequestPostRequestSubjectOneOf3 {
     'kind': ApiV1ContentTranslationRequestPostRequestSubjectOneOf3KindEnum;
     'projectSlug': string;
+    'sourceVersion': string;
 }
 
 export const ApiV1ContentTranslationRequestPostRequestSubjectOneOf3KindEnum = {
@@ -2400,6 +2457,7 @@ export interface ApiV1ContentTranslationRequestPostRequestSubjectOneOf4 {
     'kind': ApiV1ContentTranslationRequestPostRequestSubjectOneOf4KindEnum;
     'conversationSlugId': string;
     'itemSlugId': string;
+    'sourceVersion': string;
 }
 
 export const ApiV1ContentTranslationRequestPostRequestSubjectOneOf4KindEnum = {
@@ -2459,17 +2517,69 @@ export interface ApiV1ConversationCreatePost200ResponseOneOf {
 }
 export interface ApiV1ConversationCreatePost200ResponseOneOf1 {
     'success': boolean;
-    'reason': ApiV1ConversationCreatePost200ResponseOneOf1ReasonEnum;
+    'failure': ApiV1ConversationCreatePost200ResponseOneOf1Failure;
+}
+/**
+ * @type ApiV1ConversationCreatePost200ResponseOneOf1Failure
+ */
+export type ApiV1ConversationCreatePost200ResponseOneOf1Failure = ApiV1ConversationCreatePost200ResponseOneOf1FailureOneOf | ApiV1ConversationCreatePost200ResponseOneOf1FailureOneOf1 | ApiV1ConversationCreatePost200ResponseOneOf1FailureOneOf2;
+
+export interface ApiV1ConversationCreatePost200ResponseOneOf1FailureOneOf {
+    'target': ApiV1ConversationCreatePost200ResponseOneOf1FailureOneOfTargetEnum;
+    'reason': ApiV1ConversationCreatePost200ResponseOneOf1FailureOneOfReasonEnum;
 }
 
-export const ApiV1ConversationCreatePost200ResponseOneOf1ReasonEnum = {
-    PlainTextTooLong: 'plain_text_too_long',
-    HtmlTooLong: 'html_too_long',
+export const ApiV1ConversationCreatePost200ResponseOneOf1FailureOneOfTargetEnum = {
+    Project: 'project',
+} as const;
+
+export type ApiV1ConversationCreatePost200ResponseOneOf1FailureOneOfTargetEnum = typeof ApiV1ConversationCreatePost200ResponseOneOf1FailureOneOfTargetEnum[keyof typeof ApiV1ConversationCreatePost200ResponseOneOf1FailureOneOfTargetEnum];
+export const ApiV1ConversationCreatePost200ResponseOneOf1FailureOneOfReasonEnum = {
     OrganizationNotAvailable: 'organization_not_available',
     MissingConversationCreateCapability: 'missing_conversation_create_capability',
 } as const;
 
-export type ApiV1ConversationCreatePost200ResponseOneOf1ReasonEnum = typeof ApiV1ConversationCreatePost200ResponseOneOf1ReasonEnum[keyof typeof ApiV1ConversationCreatePost200ResponseOneOf1ReasonEnum];
+export type ApiV1ConversationCreatePost200ResponseOneOf1FailureOneOfReasonEnum = typeof ApiV1ConversationCreatePost200ResponseOneOf1FailureOneOfReasonEnum[keyof typeof ApiV1ConversationCreatePost200ResponseOneOf1FailureOneOfReasonEnum];
+
+export interface ApiV1ConversationCreatePost200ResponseOneOf1FailureOneOf1 {
+    'target': ApiV1ConversationCreatePost200ResponseOneOf1FailureOneOf1TargetEnum;
+    'reason': ApiV1ConversationCreatePost200ResponseOneOf1FailureOneOf1ReasonEnum;
+    'count': number;
+    'limit': number;
+}
+
+export const ApiV1ConversationCreatePost200ResponseOneOf1FailureOneOf1TargetEnum = {
+    ConversationBody: 'conversation_body',
+} as const;
+
+export type ApiV1ConversationCreatePost200ResponseOneOf1FailureOneOf1TargetEnum = typeof ApiV1ConversationCreatePost200ResponseOneOf1FailureOneOf1TargetEnum[keyof typeof ApiV1ConversationCreatePost200ResponseOneOf1FailureOneOf1TargetEnum];
+export const ApiV1ConversationCreatePost200ResponseOneOf1FailureOneOf1ReasonEnum = {
+    PlainTextTooLong: 'plain_text_too_long',
+    HtmlTooLong: 'html_too_long',
+} as const;
+
+export type ApiV1ConversationCreatePost200ResponseOneOf1FailureOneOf1ReasonEnum = typeof ApiV1ConversationCreatePost200ResponseOneOf1FailureOneOf1ReasonEnum[keyof typeof ApiV1ConversationCreatePost200ResponseOneOf1FailureOneOf1ReasonEnum];
+
+export interface ApiV1ConversationCreatePost200ResponseOneOf1FailureOneOf2 {
+    'target': ApiV1ConversationCreatePost200ResponseOneOf1FailureOneOf2TargetEnum;
+    'reason': ApiV1ConversationCreatePost200ResponseOneOf1FailureOneOf2ReasonEnum;
+    'index': number;
+    'count': number;
+    'limit': number;
+}
+
+export const ApiV1ConversationCreatePost200ResponseOneOf1FailureOneOf2TargetEnum = {
+    SeedOpinion: 'seed_opinion',
+} as const;
+
+export type ApiV1ConversationCreatePost200ResponseOneOf1FailureOneOf2TargetEnum = typeof ApiV1ConversationCreatePost200ResponseOneOf1FailureOneOf2TargetEnum[keyof typeof ApiV1ConversationCreatePost200ResponseOneOf1FailureOneOf2TargetEnum];
+export const ApiV1ConversationCreatePost200ResponseOneOf1FailureOneOf2ReasonEnum = {
+    PlainTextEmpty: 'plain_text_empty',
+    PlainTextTooLong: 'plain_text_too_long',
+    HtmlTooLong: 'html_too_long',
+} as const;
+
+export type ApiV1ConversationCreatePost200ResponseOneOf1FailureOneOf2ReasonEnum = typeof ApiV1ConversationCreatePost200ResponseOneOf1FailureOneOf2ReasonEnum[keyof typeof ApiV1ConversationCreatePost200ResponseOneOf1FailureOneOf2ReasonEnum];
 
 /**
  * @type ApiV1ConversationCreatePostRequest
@@ -2479,7 +2589,6 @@ export type ApiV1ConversationCreatePostRequest = ApiV1ConversationCreatePostRequ
 export interface ApiV1ConversationCreatePostRequestOneOf {
     'conversationTitle': string;
     'conversationBody'?: string;
-    'conversationBodyPlainText': string;
     'projectSlug'?: string;
     'languageSettingsSource'?: ApiV1ConversationCreatePostRequestOneOfLanguageSettingsSourceEnum;
     'postAsOrganization': string;
@@ -2522,7 +2631,6 @@ export type ApiV1ConversationCreatePostRequestOneOfConversationTypeEnum = typeof
 export interface ApiV1ConversationCreatePostRequestOneOf1 {
     'conversationTitle': string;
     'conversationBody'?: string;
-    'conversationBodyPlainText': string;
     'projectSlug'?: string;
     'languageSettingsSource'?: ApiV1ConversationCreatePostRequestOneOf1LanguageSettingsSourceEnum;
     'postAsOrganization': string;
@@ -3095,6 +3203,7 @@ export interface ApiV1ConversationFetchRecentPost200ResponseConversationDataList
     'projectContext'?: ApiV1ConversationFetchRecentPost200ResponseConversationDataListInnerMetadataOneOfProjectContext;
     'conversationType': ApiV1ConversationFetchRecentPost200ResponseConversationDataListInnerMetadataOneOf1ConversationTypeEnum;
     'rankingMode': ApiV1ConversationFetchRecentPost200ResponseConversationDataListInnerMetadataOneOf1RankingModeEnum;
+    'rankingStatsSnapshotId'?: number;
 }
 
 export const ApiV1ConversationFetchRecentPost200ResponseConversationDataListInnerMetadataOneOf1ParticipationModeEnum = {
@@ -4058,7 +4167,6 @@ export interface ApiV1ConversationUpdatePostRequest {
     'conversationSlugId': string;
     'conversationTitle': string;
     'conversationBody'?: string;
-    'conversationBodyPlainText': string;
     'isIndexed': boolean;
     'participationMode': ApiV1ConversationUpdatePostRequestParticipationModeEnum;
     'multilingualSetting': ApiV1ConversationCreatePostRequestOneOfMultilingualSetting;
@@ -4433,6 +4541,7 @@ export const ApiV1OpinionCreatePost200ResponseOneOf1ReasonEnum = {
     EmailVerificationRequired: 'email_verification_required',
     SurveyRequired: 'survey_required',
     SurveyOutdated: 'survey_outdated',
+    PlainTextEmpty: 'plain_text_empty',
     PlainTextTooLong: 'plain_text_too_long',
     HtmlTooLong: 'html_too_long',
 } as const;
@@ -4523,7 +4632,6 @@ export interface ApiV1OpinionCreatePost200ResponseOneOfDisplayedOpinionItemDispl
 export interface ApiV1OpinionCreatePostRequest {
     'conversationSlugId': string;
     'opinionBody': string;
-    'opinionPlainText': string;
 }
 export interface ApiV1OpinionFetchAnalysisCheckpointsByConversationPost200ResponseInner {
     'conversationViewSnapshotId': number;
@@ -4629,15 +4737,13 @@ export interface ApiV1OpinionFetchAnalysisFrameGroupsByFramePost200ResponseClust
     'opinionSlugId': string;
     'createdAt': string;
     'updatedAt': string;
-    'opinion': string;
-    'sourceLanguageCode': string | null;
     'numParticipants': number;
     'numAgrees': number;
     'numDisagrees': number;
     'numPasses': number;
     'username': string;
-    'moderation': ApiV1ModerationOpinionGetPost200Response;
     'isSeed': boolean;
+    'content': ApiV1OpinionFetchAnalysisFrameGroupsByFramePost200ResponseClustersValueRepresentativeInnerContent;
     'clustersStats': Array<ApiV1OpinionFetchAnalysisFrameGroupsByFramePost200ResponseClustersValueRepresentativeInnerClustersStatsInner>;
     'groupAwareConsensusAgree': number;
     'groupAwareConsensusDisagree': number;
@@ -4662,6 +4768,42 @@ export const ApiV1OpinionFetchAnalysisFrameGroupsByFramePost200ResponseClustersV
 } as const;
 
 export type ApiV1OpinionFetchAnalysisFrameGroupsByFramePost200ResponseClustersValueRepresentativeInnerClustersStatsInnerKeyEnum = typeof ApiV1OpinionFetchAnalysisFrameGroupsByFramePost200ResponseClustersValueRepresentativeInnerClustersStatsInnerKeyEnum[keyof typeof ApiV1OpinionFetchAnalysisFrameGroupsByFramePost200ResponseClustersValueRepresentativeInnerClustersStatsInnerKeyEnum];
+
+/**
+ * @type ApiV1OpinionFetchAnalysisFrameGroupsByFramePost200ResponseClustersValueRepresentativeInnerContent
+ */
+export type ApiV1OpinionFetchAnalysisFrameGroupsByFramePost200ResponseClustersValueRepresentativeInnerContent = ApiV1OpinionFetchAnalysisFrameGroupsByFramePost200ResponseClustersValueRepresentativeInnerContentOneOf | ApiV1OpinionFetchAnalysisFrameGroupsByFramePost200ResponseClustersValueRepresentativeInnerContentOneOf1;
+
+export interface ApiV1OpinionFetchAnalysisFrameGroupsByFramePost200ResponseClustersValueRepresentativeInnerContentOneOf {
+    'status': ApiV1OpinionFetchAnalysisFrameGroupsByFramePost200ResponseClustersValueRepresentativeInnerContentOneOfStatusEnum;
+    'html': string;
+    'sourceLanguageCode': string | null;
+    'displayContent': ApiV1OpinionCreatePost200ResponseOneOfDisplayedOpinionItemDisplayContent;
+    'moderation': ApiV1ModerationOpinionGetPost200Response;
+}
+
+export const ApiV1OpinionFetchAnalysisFrameGroupsByFramePost200ResponseClustersValueRepresentativeInnerContentOneOfStatusEnum = {
+    Visible: 'visible',
+} as const;
+
+export type ApiV1OpinionFetchAnalysisFrameGroupsByFramePost200ResponseClustersValueRepresentativeInnerContentOneOfStatusEnum = typeof ApiV1OpinionFetchAnalysisFrameGroupsByFramePost200ResponseClustersValueRepresentativeInnerContentOneOfStatusEnum[keyof typeof ApiV1OpinionFetchAnalysisFrameGroupsByFramePost200ResponseClustersValueRepresentativeInnerContentOneOfStatusEnum];
+
+export interface ApiV1OpinionFetchAnalysisFrameGroupsByFramePost200ResponseClustersValueRepresentativeInnerContentOneOf1 {
+    'status': ApiV1OpinionFetchAnalysisFrameGroupsByFramePost200ResponseClustersValueRepresentativeInnerContentOneOf1StatusEnum;
+    'reason': ApiV1OpinionFetchAnalysisFrameGroupsByFramePost200ResponseClustersValueRepresentativeInnerContentOneOf1ReasonEnum;
+}
+
+export const ApiV1OpinionFetchAnalysisFrameGroupsByFramePost200ResponseClustersValueRepresentativeInnerContentOneOf1StatusEnum = {
+    Redacted: 'redacted',
+} as const;
+
+export type ApiV1OpinionFetchAnalysisFrameGroupsByFramePost200ResponseClustersValueRepresentativeInnerContentOneOf1StatusEnum = typeof ApiV1OpinionFetchAnalysisFrameGroupsByFramePost200ResponseClustersValueRepresentativeInnerContentOneOf1StatusEnum[keyof typeof ApiV1OpinionFetchAnalysisFrameGroupsByFramePost200ResponseClustersValueRepresentativeInnerContentOneOf1StatusEnum];
+export const ApiV1OpinionFetchAnalysisFrameGroupsByFramePost200ResponseClustersValueRepresentativeInnerContentOneOf1ReasonEnum = {
+    StatementDeleted: 'statement_deleted',
+    HiddenByModeration: 'hidden_by_moderation',
+} as const;
+
+export type ApiV1OpinionFetchAnalysisFrameGroupsByFramePost200ResponseClustersValueRepresentativeInnerContentOneOf1ReasonEnum = typeof ApiV1OpinionFetchAnalysisFrameGroupsByFramePost200ResponseClustersValueRepresentativeInnerContentOneOf1ReasonEnum[keyof typeof ApiV1OpinionFetchAnalysisFrameGroupsByFramePost200ResponseClustersValueRepresentativeInnerContentOneOf1ReasonEnum];
 
 export interface ApiV1OpinionFetchAnalysisFrameGroupsByFramePostRequest {
     'conversationSlugId': string;
@@ -5024,10 +5166,19 @@ export interface ApiV1OpinionFetchAnalysisFrameManifestByConversationPost200Resp
     'isClosed': boolean;
 }
 export interface ApiV1OpinionFetchAnalysisFrameManifestByConversationPost200ResponseFrameKey {
+    'mode': ApiV1OpinionFetchAnalysisFrameManifestByConversationPost200ResponseFrameKeyModeEnum;
     'conversationViewSnapshotId': number;
     'analysisSnapshotId': number;
     'candidateId': number;
 }
+
+export const ApiV1OpinionFetchAnalysisFrameManifestByConversationPost200ResponseFrameKeyModeEnum = {
+    Live: 'live',
+    Checkpoint: 'checkpoint',
+} as const;
+
+export type ApiV1OpinionFetchAnalysisFrameManifestByConversationPost200ResponseFrameKeyModeEnum = typeof ApiV1OpinionFetchAnalysisFrameManifestByConversationPost200ResponseFrameKeyModeEnum[keyof typeof ApiV1OpinionFetchAnalysisFrameManifestByConversationPost200ResponseFrameKeyModeEnum];
+
 export interface ApiV1OpinionFetchAnalysisFrameManifestByConversationPostRequest {
     'conversationSlugId': string;
     'analysisView'?: ApiV1OpinionFetchAnalysisFrameManifestByConversationPostRequestAnalysisViewEnum;
@@ -5161,6 +5312,7 @@ export type ApiV1PremiumFeatureAccessCheckPostRequestFeatureEnum = typeof ApiV1P
 
 export interface ApiV1ProjectContentFetchPostRequest {
     'projectSlug': string;
+    'conversationSlugId'?: string;
     'sourceVersion': string;
     'mode': ApiV1ProjectContentFetchPostRequestModeEnum;
     'requestMode': ApiV1ProjectContentFetchPostRequestRequestModeEnum;
@@ -5296,6 +5448,7 @@ export interface ApiV1ProjectPageFetchPost200ResponseActivitiesInnerOneOf1 {
     'displayContent': ApiV1ProjectPageFetchPost200ResponseActivitiesInnerOneOfDisplayContent;
     'stats': ApiV1ProjectPageFetchPost200ResponseActivitiesInnerOneOfStats;
     'isIndexed': boolean;
+    'alternateContent'?: ApiV1ProjectPageFetchPost200ResponseActivitiesInnerOneOf1AlternateContent;
 }
 
 export const ApiV1ProjectPageFetchPost200ResponseActivitiesInnerOneOf1ConversationTypeEnum = {
@@ -5304,6 +5457,18 @@ export const ApiV1ProjectPageFetchPost200ResponseActivitiesInnerOneOf1Conversati
 } as const;
 
 export type ApiV1ProjectPageFetchPost200ResponseActivitiesInnerOneOf1ConversationTypeEnum = typeof ApiV1ProjectPageFetchPost200ResponseActivitiesInnerOneOf1ConversationTypeEnum[keyof typeof ApiV1ProjectPageFetchPost200ResponseActivitiesInnerOneOf1ConversationTypeEnum];
+
+export interface ApiV1ProjectPageFetchPost200ResponseActivitiesInnerOneOf1AlternateContent {
+    'mode': ApiV1ProjectPageFetchPost200ResponseActivitiesInnerOneOf1AlternateContentModeEnum;
+    'content': ApiV1ProjectPageFetchPost200ResponseActivitiesInnerOneOfDisplayContentAnyOfContent;
+}
+
+export const ApiV1ProjectPageFetchPost200ResponseActivitiesInnerOneOf1AlternateContentModeEnum = {
+    Original: 'original',
+    Translated: 'translated',
+} as const;
+
+export type ApiV1ProjectPageFetchPost200ResponseActivitiesInnerOneOf1AlternateContentModeEnum = typeof ApiV1ProjectPageFetchPost200ResponseActivitiesInnerOneOf1AlternateContentModeEnum[keyof typeof ApiV1ProjectPageFetchPost200ResponseActivitiesInnerOneOf1AlternateContentModeEnum];
 
 export interface ApiV1ProjectPageFetchPost200ResponseActivitiesInnerOneOfDisplayContent {
     'sourceVersion': string;
@@ -5407,6 +5572,7 @@ export interface ApiV1ProjectPageFetchPost200ResponseNextActivityCursor {
 export interface ApiV1ProjectPageFetchPost200ResponseProject {
     'slug': string;
     'displayContent': ApiV1ProjectPageFetchPost200ResponseProjectDisplayContent;
+    'dynamicTranslationEnabled': boolean;
     'bannerVariant': ApiV1ProjectPageFetchPost200ResponseProjectBannerVariantEnum;
     'bannerImageUrl'?: string;
     'participantCount': number;
@@ -5609,6 +5775,21 @@ export const ApiV1RankingBwsItemsFetchPost200ResponseItemsInnerLifecycleStatusEn
 
 export type ApiV1RankingBwsItemsFetchPost200ResponseItemsInnerLifecycleStatusEnum = typeof ApiV1RankingBwsItemsFetchPost200ResponseItemsInnerLifecycleStatusEnum[keyof typeof ApiV1RankingBwsItemsFetchPost200ResponseItemsInnerLifecycleStatusEnum];
 
+export interface ApiV1RankingBwsItemsFetchPostRequest {
+    'conversationSlugId': string;
+    'lifecycleFilter'?: ApiV1RankingBwsItemsFetchPostRequestLifecycleFilterEnum;
+}
+
+export const ApiV1RankingBwsItemsFetchPostRequestLifecycleFilterEnum = {
+    Active: 'active',
+    Completed: 'completed',
+    InProgress: 'in_progress',
+    Canceled: 'canceled',
+    All: 'all',
+} as const;
+
+export type ApiV1RankingBwsItemsFetchPostRequestLifecycleFilterEnum = typeof ApiV1RankingBwsItemsFetchPostRequestLifecycleFilterEnum[keyof typeof ApiV1RankingBwsItemsFetchPostRequestLifecycleFilterEnum];
+
 export interface ApiV1RankingBwsItemsLifecycleUpdatePostRequest {
     'conversationSlugId': string;
     'itemSlugId': string;
@@ -5727,6 +5908,8 @@ export interface ApiV1RankingBwsResultsPost200ResponseRankingsInnerDisplayConten
 export interface ApiV1RankingBwsResultsPostRequest {
     'conversationSlugId': string;
     'lifecycleFilter'?: ApiV1RankingBwsResultsPostRequestLifecycleFilterEnum;
+    'rankingStatsSnapshotId'?: number;
+    'requestedRankingStatsSnapshotId'?: number;
 }
 
 export const ApiV1RankingBwsResultsPostRequestLifecycleFilterEnum = {
@@ -5758,6 +5941,61 @@ export interface ApiV1RankingBwsSavePostRequestComparisonsInner {
     'best': string;
     'worst': string;
     'set': Array<string>;
+}
+export interface ApiV1RankingBwsStatsCheckpointsPost200ResponseInner {
+    'rankingStatsSnapshotId': number;
+    'createdAt': string;
+    'itemCount': number;
+    'voteCount': number;
+    'participantCount': number;
+    'totalItemCount': number;
+    'totalVoteCount': number;
+    'totalParticipantCount': number;
+    'isClosed': boolean;
+    'reasons': Array<ApiV1RankingBwsStatsCheckpointsPost200ResponseInnerReasonsInner>;
+}
+/**
+ * @type ApiV1RankingBwsStatsCheckpointsPost200ResponseInnerReasonsInner
+ */
+export type ApiV1RankingBwsStatsCheckpointsPost200ResponseInnerReasonsInner = ApiV1RankingBwsStatsCheckpointsPost200ResponseInnerReasonsInnerOneOf | ApiV1RankingBwsStatsCheckpointsPost200ResponseInnerReasonsInnerOneOf1 | ApiV1RankingBwsStatsCheckpointsPost200ResponseInnerReasonsInnerOneOf2;
+
+export interface ApiV1RankingBwsStatsCheckpointsPost200ResponseInnerReasonsInnerOneOf {
+    'reason': ApiV1RankingBwsStatsCheckpointsPost200ResponseInnerReasonsInnerOneOfReasonEnum;
+    'participantCount': number;
+    'participantMilestone': number;
+}
+
+export const ApiV1RankingBwsStatsCheckpointsPost200ResponseInnerReasonsInnerOneOfReasonEnum = {
+    MajorParticipationMilestone: 'major_participation_milestone',
+} as const;
+
+export type ApiV1RankingBwsStatsCheckpointsPost200ResponseInnerReasonsInnerOneOfReasonEnum = typeof ApiV1RankingBwsStatsCheckpointsPost200ResponseInnerReasonsInnerOneOfReasonEnum[keyof typeof ApiV1RankingBwsStatsCheckpointsPost200ResponseInnerReasonsInnerOneOfReasonEnum];
+
+export interface ApiV1RankingBwsStatsCheckpointsPost200ResponseInnerReasonsInnerOneOf1 {
+    'reason': ApiV1RankingBwsStatsCheckpointsPost200ResponseInnerReasonsInnerOneOf1ReasonEnum;
+    'voteCount': number;
+    'voteMilestone': number;
+}
+
+export const ApiV1RankingBwsStatsCheckpointsPost200ResponseInnerReasonsInnerOneOf1ReasonEnum = {
+    MajorVoteMilestone: 'major_vote_milestone',
+} as const;
+
+export type ApiV1RankingBwsStatsCheckpointsPost200ResponseInnerReasonsInnerOneOf1ReasonEnum = typeof ApiV1RankingBwsStatsCheckpointsPost200ResponseInnerReasonsInnerOneOf1ReasonEnum[keyof typeof ApiV1RankingBwsStatsCheckpointsPost200ResponseInnerReasonsInnerOneOf1ReasonEnum];
+
+export interface ApiV1RankingBwsStatsCheckpointsPost200ResponseInnerReasonsInnerOneOf2 {
+    'reason': ApiV1RankingBwsStatsCheckpointsPost200ResponseInnerReasonsInnerOneOf2ReasonEnum;
+}
+
+export const ApiV1RankingBwsStatsCheckpointsPost200ResponseInnerReasonsInnerOneOf2ReasonEnum = {
+    ConversationClosed: 'conversation_closed',
+} as const;
+
+export type ApiV1RankingBwsStatsCheckpointsPost200ResponseInnerReasonsInnerOneOf2ReasonEnum = typeof ApiV1RankingBwsStatsCheckpointsPost200ResponseInnerReasonsInnerOneOf2ReasonEnum[keyof typeof ApiV1RankingBwsStatsCheckpointsPost200ResponseInnerReasonsInnerOneOf2ReasonEnum];
+
+export interface ApiV1RankingBwsStatsCheckpointsPostRequest {
+    'conversationSlugId': string;
+    'requestedRankingStatsSnapshotId'?: number;
 }
 export interface ApiV1RankingBwsSyncPost200Response {
     'created': number;
@@ -5834,7 +6072,18 @@ export interface ApiV1SurveyAnswerSavePostRequest {
 /**
  * @type ApiV1SurveyAnswerSavePostRequestAnswer
  */
-export type ApiV1SurveyAnswerSavePostRequestAnswer = ApiV1SurveyFormFetchPost200ResponseOneOfQuestionsInnerAllOfOneOfCurrentAnswerOneOf | ApiV1SurveyFormFetchPost200ResponseOneOfQuestionsInnerAllOfOneOfCurrentAnswerOneOf1;
+export type ApiV1SurveyAnswerSavePostRequestAnswer = ApiV1SurveyAnswerSavePostRequestAnswerOneOf | ApiV1SurveyFormFetchPost200ResponseOneOfQuestionsInnerAllOfOneOfCurrentAnswerOneOf;
+
+export interface ApiV1SurveyAnswerSavePostRequestAnswerOneOf {
+    'questionType': ApiV1SurveyAnswerSavePostRequestAnswerOneOfQuestionTypeEnum;
+    'textValueHtml': string;
+}
+
+export const ApiV1SurveyAnswerSavePostRequestAnswerOneOfQuestionTypeEnum = {
+    FreeText: 'free_text',
+} as const;
+
+export type ApiV1SurveyAnswerSavePostRequestAnswerOneOfQuestionTypeEnum = typeof ApiV1SurveyAnswerSavePostRequestAnswerOneOfQuestionTypeEnum[keyof typeof ApiV1SurveyAnswerSavePostRequestAnswerOneOfQuestionTypeEnum];
 
 export interface ApiV1SurveyCompletionCountsPost200Response {
     'hasSurvey': boolean;
@@ -7828,6 +8077,110 @@ export const DefaultApiAxiosParamCreator = function (configuration?: Configurati
         },
         /**
          * 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        apiV1AuthSessionsListPost: async (options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            const localVarPath = `/api/v1/auth/sessions/list`;
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication BearerAuth required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        apiV1AuthSessionsLogoutAllPost: async (options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            const localVarPath = `/api/v1/auth/sessions/logout-all`;
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication BearerAuth required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @param {ApiV1AuthSessionsRevokePostRequest} apiV1AuthSessionsRevokePostRequest 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        apiV1AuthSessionsRevokePost: async (apiV1AuthSessionsRevokePostRequest: ApiV1AuthSessionsRevokePostRequest, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'apiV1AuthSessionsRevokePostRequest' is not null or undefined
+            assertParamExists('apiV1AuthSessionsRevokePost', 'apiV1AuthSessionsRevokePostRequest', apiV1AuthSessionsRevokePostRequest)
+            const localVarPath = `/api/v1/auth/sessions/revoke`;
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication BearerAuth required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(apiV1AuthSessionsRevokePostRequest, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
          * @param {ApiV1AuthTicketVerifyPostRequest} apiV1AuthTicketVerifyPostRequest 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -9727,13 +10080,13 @@ export const DefaultApiAxiosParamCreator = function (configuration?: Configurati
         },
         /**
          * 
-         * @param {ApiV1RankingBwsResultsPostRequest} apiV1RankingBwsResultsPostRequest 
+         * @param {ApiV1RankingBwsItemsFetchPostRequest} apiV1RankingBwsItemsFetchPostRequest 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        apiV1RankingBwsItemsFetchPost: async (apiV1RankingBwsResultsPostRequest: ApiV1RankingBwsResultsPostRequest, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'apiV1RankingBwsResultsPostRequest' is not null or undefined
-            assertParamExists('apiV1RankingBwsItemsFetchPost', 'apiV1RankingBwsResultsPostRequest', apiV1RankingBwsResultsPostRequest)
+        apiV1RankingBwsItemsFetchPost: async (apiV1RankingBwsItemsFetchPostRequest: ApiV1RankingBwsItemsFetchPostRequest, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'apiV1RankingBwsItemsFetchPostRequest' is not null or undefined
+            assertParamExists('apiV1RankingBwsItemsFetchPost', 'apiV1RankingBwsItemsFetchPostRequest', apiV1RankingBwsItemsFetchPostRequest)
             const localVarPath = `/api/v1/ranking/bws/items/fetch`;
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
@@ -9756,7 +10109,7 @@ export const DefaultApiAxiosParamCreator = function (configuration?: Configurati
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
             localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-            localVarRequestOptions.data = serializeDataIfNeeded(apiV1RankingBwsResultsPostRequest, localVarRequestOptions, configuration)
+            localVarRequestOptions.data = serializeDataIfNeeded(apiV1RankingBwsItemsFetchPostRequest, localVarRequestOptions, configuration)
 
             return {
                 url: toPathString(localVarUrlObj),
@@ -9908,6 +10261,44 @@ export const DefaultApiAxiosParamCreator = function (configuration?: Configurati
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
             localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
             localVarRequestOptions.data = serializeDataIfNeeded(apiV1RankingBwsSavePostRequest, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @param {ApiV1RankingBwsStatsCheckpointsPostRequest} apiV1RankingBwsStatsCheckpointsPostRequest 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        apiV1RankingBwsStatsCheckpointsPost: async (apiV1RankingBwsStatsCheckpointsPostRequest: ApiV1RankingBwsStatsCheckpointsPostRequest, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'apiV1RankingBwsStatsCheckpointsPostRequest' is not null or undefined
+            assertParamExists('apiV1RankingBwsStatsCheckpointsPost', 'apiV1RankingBwsStatsCheckpointsPostRequest', apiV1RankingBwsStatsCheckpointsPostRequest)
+            const localVarPath = `/api/v1/ranking/bws/stats/checkpoints`;
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication BearerAuth required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(apiV1RankingBwsStatsCheckpointsPostRequest, localVarRequestOptions, configuration)
 
             return {
                 url: toPathString(localVarUrlObj),
@@ -11297,7 +11688,7 @@ export const DefaultApiFp = function(configuration?: Configuration) {
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async apiV1AuthEmailVerifyOtpPost(apiV1AuthEmailVerifyOtpPostRequest: ApiV1AuthEmailVerifyOtpPostRequest, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ApiV1AuthPhoneVerifyOtpPost200Response>> {
+        async apiV1AuthEmailVerifyOtpPost(apiV1AuthEmailVerifyOtpPostRequest: ApiV1AuthEmailVerifyOtpPostRequest, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ApiV1AuthEmailVerifyOtpPost200Response>> {
             const localVarAxiosArgs = await localVarAxiosParamCreator.apiV1AuthEmailVerifyOtpPost(apiV1AuthEmailVerifyOtpPostRequest, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['DefaultApi.apiV1AuthEmailVerifyOtpPost']?.[localVarOperationServerIndex]?.url;
@@ -11324,6 +11715,40 @@ export const DefaultApiFp = function(configuration?: Configuration) {
             const localVarAxiosArgs = await localVarAxiosParamCreator.apiV1AuthPhoneVerifyOtpPost(apiV1AuthPhoneVerifyOtpPostRequest, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['DefaultApi.apiV1AuthPhoneVerifyOtpPost']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async apiV1AuthSessionsListPost(options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ApiV1AuthSessionsListPost200Response>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.apiV1AuthSessionsListPost(options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['DefaultApi.apiV1AuthSessionsListPost']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async apiV1AuthSessionsLogoutAllPost(options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ApiV1AuthSessionsLogoutAllPost200Response>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.apiV1AuthSessionsLogoutAllPost(options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['DefaultApi.apiV1AuthSessionsLogoutAllPost']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @param {ApiV1AuthSessionsRevokePostRequest} apiV1AuthSessionsRevokePostRequest 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async apiV1AuthSessionsRevokePost(apiV1AuthSessionsRevokePostRequest: ApiV1AuthSessionsRevokePostRequest, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ApiV1AuthSessionsRevokePost200Response>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.apiV1AuthSessionsRevokePost(apiV1AuthSessionsRevokePostRequest, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['DefaultApi.apiV1AuthSessionsRevokePost']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -11934,12 +12359,12 @@ export const DefaultApiFp = function(configuration?: Configuration) {
         },
         /**
          * 
-         * @param {ApiV1RankingBwsResultsPostRequest} apiV1RankingBwsResultsPostRequest 
+         * @param {ApiV1RankingBwsItemsFetchPostRequest} apiV1RankingBwsItemsFetchPostRequest 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async apiV1RankingBwsItemsFetchPost(apiV1RankingBwsResultsPostRequest: ApiV1RankingBwsResultsPostRequest, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ApiV1RankingBwsItemsFetchPost200Response>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.apiV1RankingBwsItemsFetchPost(apiV1RankingBwsResultsPostRequest, options);
+        async apiV1RankingBwsItemsFetchPost(apiV1RankingBwsItemsFetchPostRequest: ApiV1RankingBwsItemsFetchPostRequest, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ApiV1RankingBwsItemsFetchPost200Response>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.apiV1RankingBwsItemsFetchPost(apiV1RankingBwsItemsFetchPostRequest, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['DefaultApi.apiV1RankingBwsItemsFetchPost']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -11990,6 +12415,18 @@ export const DefaultApiFp = function(configuration?: Configuration) {
             const localVarAxiosArgs = await localVarAxiosParamCreator.apiV1RankingBwsSavePost(apiV1RankingBwsSavePostRequest, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['DefaultApi.apiV1RankingBwsSavePost']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @param {ApiV1RankingBwsStatsCheckpointsPostRequest} apiV1RankingBwsStatsCheckpointsPostRequest 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async apiV1RankingBwsStatsCheckpointsPost(apiV1RankingBwsStatsCheckpointsPostRequest: ApiV1RankingBwsStatsCheckpointsPostRequest, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Array<ApiV1RankingBwsStatsCheckpointsPost200ResponseInner>>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.apiV1RankingBwsStatsCheckpointsPost(apiV1RankingBwsStatsCheckpointsPostRequest, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['DefaultApi.apiV1RankingBwsStatsCheckpointsPost']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -12592,7 +13029,7 @@ export const DefaultApiFactory = function (configuration?: Configuration, basePa
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        apiV1AuthEmailVerifyOtpPost(apiV1AuthEmailVerifyOtpPostRequest: ApiV1AuthEmailVerifyOtpPostRequest, options?: RawAxiosRequestConfig): AxiosPromise<ApiV1AuthPhoneVerifyOtpPost200Response> {
+        apiV1AuthEmailVerifyOtpPost(apiV1AuthEmailVerifyOtpPostRequest: ApiV1AuthEmailVerifyOtpPostRequest, options?: RawAxiosRequestConfig): AxiosPromise<ApiV1AuthEmailVerifyOtpPost200Response> {
             return localVarFp.apiV1AuthEmailVerifyOtpPost(apiV1AuthEmailVerifyOtpPostRequest, options).then((request) => request(axios, basePath));
         },
         /**
@@ -12611,6 +13048,31 @@ export const DefaultApiFactory = function (configuration?: Configuration, basePa
          */
         apiV1AuthPhoneVerifyOtpPost(apiV1AuthPhoneVerifyOtpPostRequest: ApiV1AuthPhoneVerifyOtpPostRequest, options?: RawAxiosRequestConfig): AxiosPromise<ApiV1AuthPhoneVerifyOtpPost200Response> {
             return localVarFp.apiV1AuthPhoneVerifyOtpPost(apiV1AuthPhoneVerifyOtpPostRequest, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        apiV1AuthSessionsListPost(options?: RawAxiosRequestConfig): AxiosPromise<ApiV1AuthSessionsListPost200Response> {
+            return localVarFp.apiV1AuthSessionsListPost(options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        apiV1AuthSessionsLogoutAllPost(options?: RawAxiosRequestConfig): AxiosPromise<ApiV1AuthSessionsLogoutAllPost200Response> {
+            return localVarFp.apiV1AuthSessionsLogoutAllPost(options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @param {ApiV1AuthSessionsRevokePostRequest} apiV1AuthSessionsRevokePostRequest 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        apiV1AuthSessionsRevokePost(apiV1AuthSessionsRevokePostRequest: ApiV1AuthSessionsRevokePostRequest, options?: RawAxiosRequestConfig): AxiosPromise<ApiV1AuthSessionsRevokePost200Response> {
+            return localVarFp.apiV1AuthSessionsRevokePost(apiV1AuthSessionsRevokePostRequest, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -13067,12 +13529,12 @@ export const DefaultApiFactory = function (configuration?: Configuration, basePa
         },
         /**
          * 
-         * @param {ApiV1RankingBwsResultsPostRequest} apiV1RankingBwsResultsPostRequest 
+         * @param {ApiV1RankingBwsItemsFetchPostRequest} apiV1RankingBwsItemsFetchPostRequest 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        apiV1RankingBwsItemsFetchPost(apiV1RankingBwsResultsPostRequest: ApiV1RankingBwsResultsPostRequest, options?: RawAxiosRequestConfig): AxiosPromise<ApiV1RankingBwsItemsFetchPost200Response> {
-            return localVarFp.apiV1RankingBwsItemsFetchPost(apiV1RankingBwsResultsPostRequest, options).then((request) => request(axios, basePath));
+        apiV1RankingBwsItemsFetchPost(apiV1RankingBwsItemsFetchPostRequest: ApiV1RankingBwsItemsFetchPostRequest, options?: RawAxiosRequestConfig): AxiosPromise<ApiV1RankingBwsItemsFetchPost200Response> {
+            return localVarFp.apiV1RankingBwsItemsFetchPost(apiV1RankingBwsItemsFetchPostRequest, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -13109,6 +13571,15 @@ export const DefaultApiFactory = function (configuration?: Configuration, basePa
          */
         apiV1RankingBwsSavePost(apiV1RankingBwsSavePostRequest: ApiV1RankingBwsSavePostRequest, options?: RawAxiosRequestConfig): AxiosPromise<ApiV1RankingBwsSavePost200Response> {
             return localVarFp.apiV1RankingBwsSavePost(apiV1RankingBwsSavePostRequest, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @param {ApiV1RankingBwsStatsCheckpointsPostRequest} apiV1RankingBwsStatsCheckpointsPostRequest 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        apiV1RankingBwsStatsCheckpointsPost(apiV1RankingBwsStatsCheckpointsPostRequest: ApiV1RankingBwsStatsCheckpointsPostRequest, options?: RawAxiosRequestConfig): AxiosPromise<Array<ApiV1RankingBwsStatsCheckpointsPost200ResponseInner>> {
+            return localVarFp.apiV1RankingBwsStatsCheckpointsPost(apiV1RankingBwsStatsCheckpointsPostRequest, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -13678,6 +14149,34 @@ export class DefaultApi extends BaseAPI {
 
     /**
      * 
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public apiV1AuthSessionsListPost(options?: RawAxiosRequestConfig) {
+        return DefaultApiFp(this.configuration).apiV1AuthSessionsListPost(options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public apiV1AuthSessionsLogoutAllPost(options?: RawAxiosRequestConfig) {
+        return DefaultApiFp(this.configuration).apiV1AuthSessionsLogoutAllPost(options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @param {ApiV1AuthSessionsRevokePostRequest} apiV1AuthSessionsRevokePostRequest 
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public apiV1AuthSessionsRevokePost(apiV1AuthSessionsRevokePostRequest: ApiV1AuthSessionsRevokePostRequest, options?: RawAxiosRequestConfig) {
+        return DefaultApiFp(this.configuration).apiV1AuthSessionsRevokePost(apiV1AuthSessionsRevokePostRequest, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
      * @param {ApiV1AuthTicketVerifyPostRequest} apiV1AuthTicketVerifyPostRequest 
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -14182,12 +14681,12 @@ export class DefaultApi extends BaseAPI {
 
     /**
      * 
-     * @param {ApiV1RankingBwsResultsPostRequest} apiV1RankingBwsResultsPostRequest 
+     * @param {ApiV1RankingBwsItemsFetchPostRequest} apiV1RankingBwsItemsFetchPostRequest 
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
-    public apiV1RankingBwsItemsFetchPost(apiV1RankingBwsResultsPostRequest: ApiV1RankingBwsResultsPostRequest, options?: RawAxiosRequestConfig) {
-        return DefaultApiFp(this.configuration).apiV1RankingBwsItemsFetchPost(apiV1RankingBwsResultsPostRequest, options).then((request) => request(this.axios, this.basePath));
+    public apiV1RankingBwsItemsFetchPost(apiV1RankingBwsItemsFetchPostRequest: ApiV1RankingBwsItemsFetchPostRequest, options?: RawAxiosRequestConfig) {
+        return DefaultApiFp(this.configuration).apiV1RankingBwsItemsFetchPost(apiV1RankingBwsItemsFetchPostRequest, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
@@ -14228,6 +14727,16 @@ export class DefaultApi extends BaseAPI {
      */
     public apiV1RankingBwsSavePost(apiV1RankingBwsSavePostRequest: ApiV1RankingBwsSavePostRequest, options?: RawAxiosRequestConfig) {
         return DefaultApiFp(this.configuration).apiV1RankingBwsSavePost(apiV1RankingBwsSavePostRequest, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @param {ApiV1RankingBwsStatsCheckpointsPostRequest} apiV1RankingBwsStatsCheckpointsPostRequest 
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public apiV1RankingBwsStatsCheckpointsPost(apiV1RankingBwsStatsCheckpointsPostRequest: ApiV1RankingBwsStatsCheckpointsPostRequest, options?: RawAxiosRequestConfig) {
+        return DefaultApiFp(this.configuration).apiV1RankingBwsStatsCheckpointsPost(apiV1RankingBwsStatsCheckpointsPostRequest, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**

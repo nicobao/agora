@@ -16,21 +16,21 @@
 
             <Editor
               ref="editorRef"
-              v-model:plain-text="plainText"
               :model-value="modelValue"
               class="textarea-border-style"
               :placeholder="t('inputTextPlaceholder')"
               :show-toolbar="true"
               :single-line="false"
-              :disabled="false"
+              :disabled="disabled"
               :max-length="maxLengthOpinion"
-              :submit-on-enter="submitOnEnter"
+              :submit-on-shift-enter="true"
               min-height="3rem"
-              @update:model-value="(val: string) => emit('update:modelValue', val)"
-              @update:character-count="onCharacterCountUpdate"
+              @update:model-value="
+                (val: string) => emit('update:modelValue', val)
+              "
               @manually-focused="emit('focus')"
               @blur="emit('blur')"
-              @enter="emit('enter')"
+              @submit="emit('addNext')"
             />
           </div>
         </div>
@@ -43,6 +43,7 @@
       rounded
       severity="secondary"
       class="delete-button"
+      :disabled="disabled"
       @click.stop="handleDeleteClick"
       @mousedown.stop
     />
@@ -53,7 +54,7 @@
       :confirm-text="t('confirmDeleteConfirm')"
       :cancel-text="t('confirmDeleteCancel')"
       variant="destructive"
-      @confirm="emit('remove')"
+      @confirm="handleConfirmDelete"
     />
   </div>
 </template>
@@ -64,7 +65,7 @@ import Card from "primevue/card";
 import ZKConfirmDialog from "src/components/ui-library/ZKConfirmDialog.vue";
 import { useComponentI18n } from "src/composables/ui/useComponentI18n";
 import { htmlToCountedText, MAX_LENGTH_OPINION } from "src/shared/shared";
-import { defineAsyncComponent, ref } from "vue";
+import { defineAsyncComponent, ref, watch } from "vue";
 
 import {
   type SeedOpinionItemTranslations,
@@ -80,9 +81,9 @@ defineOptions({
 
 const props = defineProps<{
   modelValue: string;
-  errorMessage?: string;
+  errorMessage: string | undefined;
   isActive: boolean;
-  submitOnEnter?: boolean;
+  disabled: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -90,8 +91,7 @@ const emit = defineEmits<{
   (e: "remove"): void;
   (e: "focus"): void;
   (e: "blur"): void;
-  (e: "enter"): void;
-  (e: "update:characterCount", count: number): void;
+  (e: "addNext"): void;
 }>();
 
 const maxLengthOpinion = MAX_LENGTH_OPINION;
@@ -104,21 +104,31 @@ const { t } = useComponentI18n<SeedOpinionItemTranslations>(
   seedOpinionItemTranslations
 );
 
-const editorRef = ref<InstanceType<typeof Editor>>();
-const showDeleteConfirm = ref(false);
-const plainText = ref("");
-
-function onCharacterCountUpdate(count: number) {
-  emit("update:characterCount", count);
+interface FocusableEditor {
+  focus: () => void;
 }
 
+const editorRef = ref<FocusableEditor | null>(null);
+const showDeleteConfirm = ref(false);
+let focusWhenEditorIsReady = false;
+
+watch(editorRef, () => {
+  if (focusWhenEditorIsReady) {
+    focusEditor();
+  }
+});
+
 const handleCardClick = (): void => {
-  if (!props.isActive) {
-    editorRef.value?.focus();
+  if (!props.disabled && !props.isActive) {
+    focusEditor();
   }
 };
 
 function handleDeleteClick(): void {
+  if (props.disabled) {
+    return;
+  }
+
   if (htmlToCountedText(props.modelValue).trim().length === 0) {
     emit("remove");
     return;
@@ -127,13 +137,25 @@ function handleDeleteClick(): void {
   showDeleteConfirm.value = true;
 }
 
-// Expose focus method for parent component
-const focus = (): void => {
-  editorRef.value?.focus();
-};
+function handleConfirmDelete(): void {
+  if (!props.disabled) {
+    emit("remove");
+  }
+}
+
+function focusEditor(): void {
+  const editorInstance = editorRef.value;
+  if (editorInstance === null) {
+    focusWhenEditorIsReady = true;
+    return;
+  }
+
+  focusWhenEditorIsReady = false;
+  editorInstance.focus();
+}
 
 defineExpose({
-  focus,
+  focus: focusEditor,
 });
 </script>
 

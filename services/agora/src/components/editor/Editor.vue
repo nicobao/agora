@@ -100,7 +100,10 @@
     </div>
 
     <!-- Character count footer (shown when maxLength is provided) -->
-    <div v-if="maxLength !== undefined && showCharacterCount" class="character-count-footer">
+    <div
+      v-if="maxLength !== undefined && showCharacterCount"
+      class="character-count-footer"
+    >
       <span :class="{ 'character-count-over-limit': isOverLimit }">
         {{ internalCharacterCount }}
       </span>
@@ -118,10 +121,11 @@ import { EditorContent, useEditor } from "@tiptap/vue-3";
 import { BubbleMenu } from "@tiptap/vue-3/menus";
 import Divider from "primevue/divider";
 import { useQuasar } from "quasar";
-import { htmlToCountedText } from "src/shared/shared";
+import { countPlainTextCharacters, htmlToCountedText } from "src/shared/shared";
 import { processUserGeneratedHtml } from "src/shared-app-api/html";
 import { computed, onUnmounted, ref, watch } from "vue";
 
+import { serializeEditorContent } from "./editorContent";
 import EditorToolbarButton from "./EditorToolbarButton.vue";
 
 defineOptions({
@@ -130,30 +134,33 @@ defineOptions({
   },
 });
 
-const props = withDefaults(defineProps<{
-  showToolbar: boolean;
-  placeholder: string;
-  minHeight: string;
-  disabled: boolean;
-  singleLine: boolean;
-  maxLength?: number;
-  showCharacterCount?: boolean;
-  submitOnEnter?: boolean;
-}>(), {
-  maxLength: undefined,
-  showCharacterCount: true,
-  submitOnEnter: false,
-});
+const props = withDefaults(
+  defineProps<{
+    showToolbar: boolean;
+    placeholder: string;
+    minHeight: string;
+    disabled: boolean;
+    singleLine: boolean;
+    maxLength?: number;
+    showCharacterCount?: boolean;
+    submitOnShiftEnter?: boolean;
+  }>(),
+  {
+    maxLength: undefined,
+    showCharacterCount: true,
+    submitOnShiftEnter: false,
+  }
+);
 const emit = defineEmits<{
   manuallyFocused: [];
   blur: [];
-  enter: [];
+  submit: [];
   "update:characterCount": [count: number];
   "update:isOverLimit": [isOverLimit: boolean];
 }>();
 const $q = useQuasar();
 const modelText = defineModel<string>({ required: true });
-const modelPlainText = defineModel<string>("plainText", { required: true });
+const modelPlainText = defineModel<string>("plainText", { default: "" });
 
 // Internal character count tracking
 const internalCharacterCount = ref(0);
@@ -163,23 +170,44 @@ const isOverLimit = computed(
     internalCharacterCount.value > props.maxLength
 );
 
-function computeCharacterCount(editorInstance: TipTapEditor): number {
-  if (props.singleLine) {
-    return editorInstance.getText().length;
-  }
-  const html = editorInstance.getHTML();
-  if (html === "<p></p>" || html === "<br>" || html === "") {
-    return 0;
-  }
-  return htmlToCountedText(html).length;
-}
-
 function emitCharacterCount(count: number): void {
   internalCharacterCount.value = count;
   emit("update:characterCount", count);
   emit(
     "update:isOverLimit",
     props.maxLength !== undefined && count > props.maxLength
+  );
+}
+
+function getSerializedPlainText(serializedContent: string): string {
+  return props.singleLine
+    ? serializedContent
+    : htmlToCountedText(serializedContent);
+}
+
+let serializedEditorContent = modelText.value;
+
+function updateEditorState({
+  editorInstance,
+  updateModelText,
+}: {
+  editorInstance: TipTapEditor;
+  updateModelText: boolean;
+}): void {
+  const serializedContent = serializeEditorContent({
+    editor: editorInstance,
+    singleLine: props.singleLine,
+  });
+  const plainText = getSerializedPlainText(serializedContent);
+  serializedEditorContent = serializedContent;
+  modelPlainText.value = plainText;
+  if (updateModelText) {
+    modelText.value = serializedContent;
+  }
+  emitCharacterCount(
+    props.singleLine
+      ? plainText.length
+      : countPlainTextCharacters(plainText).characterCount
   );
 }
 
@@ -220,21 +248,50 @@ const ClearStoredMarksOnSelectionChange = Extension.create({
   },
 });
 
-// Custom extension to capture Tab/Shift-Tab for list indentation
-// This prevents the default browser behavior of moving focus to the next UI element
-// Note: StarterKit v3 includes a ListKeymap extension, but we use higher priority
-// to ensure Tab is captured for lists and doesn't change focus
+// Extend Tiptap's list shortcuts with useful fallbacks for a multiline editor.
 const CustomListTabKeymap = Extension.create({
   name: "customListTabKeymap",
-  priority: 1000, // Very high priority to ensure it captures Tab before default behavior
+  priority: 1000,
   addKeyboardShortcuts() {
     return {
-      Tab: () => this.editor.commands.sinkListItem("listItem"),
-      "Shift-Tab": () => this.editor.commands.liftListItem("listItem"),
+      Tab: () => {
+        if (this.editor.commands.sinkListItem("listItem")) {
+          return true;
+        }
+
+        const { selection } = this.editor.state;
+        const isAtEndOfListItem =
+          this.editor.isActive("listItem") &&
+          selection.empty &&
+          selection.$from.parentOffset === selection.$from.parent.content.size;
+        if (isAtEndOfListItem) {
+          return this.editor
+            .chain()
+            .splitListItem("listItem")
+            .sinkListItem("listItem")
+            .run();
+        }
+
+        return this.editor.commands.insertContent("\t");
+      },
+      "Shift-Tab": () => {
+        const { doc, selection } = this.editor.state;
+        if (
+          selection.empty &&
+          selection.from > 0 &&
+          doc.textBetween(selection.from - 1, selection.from) === "\t"
+        ) {
+          return this.editor.commands.deleteRange({
+            from: selection.from - 1,
+            to: selection.from,
+          });
+        }
+
+        return this.editor.commands.liftListItem("listItem");
+      },
     };
   },
 });
-
 
 const editor = useEditor({
   content: modelText.value,
@@ -251,14 +308,14 @@ const editor = useEditor({
       listItem: props.singleLine ? false : {},
       // Disable hard breaks in single-line mode
       hardBreak: props.singleLine ? false : {},
+      // List indentation must not create an unrelated empty paragraph.
+      trailingNode: false,
     }),
     Placeholder.configure({
       placeholder: () => props.placeholder,
     }),
-    // Add Enter key blocker for single-line mode
-    ...(props.singleLine ? [BlockEnterExtension] : []),
-    // Add custom Tab/Shift-Tab handler for list indentation (prevents focus change)
-    CustomListTabKeymap,
+    // Single-line schemas have no list nodes, so list commands must stay multiline-only.
+    props.singleLine ? BlockEnterExtension : CustomListTabKeymap,
     // Clear storedMarks on selection change for mobile (bubble menu UX)
     ...($q.platform.is.mobile ? [ClearStoredMarksOnSelectionChange] : []),
   ],
@@ -271,8 +328,17 @@ const editor = useEditor({
       return processUserGeneratedHtml(html, false, "input");
     },
     handleKeyDown(_view, event) {
-      if (props.submitOnEnter && event.key === "Enter" && !event.shiftKey) {
-        emit("enter");
+      if (
+        props.submitOnShiftEnter &&
+        event.key === "Enter" &&
+        event.shiftKey &&
+        !event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.isComposing &&
+        !event.repeat
+      ) {
+        emit("submit");
         return true;
       }
 
@@ -280,22 +346,10 @@ const editor = useEditor({
     },
   },
   onCreate: ({ editor }) => {
-    modelPlainText.value = editor.getText();
-    emitCharacterCount(computeCharacterCount(editor));
+    updateEditorState({ editorInstance: editor, updateModelText: false });
   },
   onUpdate: ({ editor }) => {
-    modelPlainText.value = editor.getText();
-    if (props.singleLine) {
-      modelText.value = editor.getText();
-    } else {
-      const html = editor.getHTML();
-      if (html === "<p></p>" || html === "<br>" || html === "") {
-        modelText.value = "";
-      } else {
-        modelText.value = html;
-      }
-    }
-    emitCharacterCount(computeCharacterCount(editor));
+    updateEditorState({ editorInstance: editor, updateModelText: true });
   },
   onFocus: () => {
     emit("manuallyFocused");
@@ -327,18 +381,13 @@ defineExpose({
 watch(
   () => modelText.value,
   (newValue) => {
-    if (editor.value) {
-      const currentContent = props.singleLine
-        ? editor.value.getText()
-        : editor.value.getHTML();
-      // Only update if the content is actually different
-      if (newValue !== currentContent) {
-        editor.value.commands.setContent(newValue);
-        modelPlainText.value = editor.value.getText();
-        // Recalculate character count after external content change (e.g. draft load)
-        emitCharacterCount(computeCharacterCount(editor.value));
-      }
+    const editorInstance = editor.value;
+    if (editorInstance === undefined || newValue === serializedEditorContent) {
+      return;
     }
+
+    serializedEditorContent = newValue;
+    editorInstance.commands.setContent(newValue);
   }
 );
 
@@ -413,6 +462,8 @@ watch(
 
 .editor :deep(.ProseMirror p) {
   margin-bottom: 0.5rem;
+  tab-size: 2;
+  white-space: pre-wrap;
 }
 
 .editor :deep(.ProseMirror p:empty) {

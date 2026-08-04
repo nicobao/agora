@@ -7,6 +7,7 @@ import {
   type SSEContentTranslationUpdatedData,
   type SSEConversationAnalysisUpdatedData,
   type SSEConversationCommentStatsUpdatedData,
+  type SSEConversationRankingStatsUpdatedData,
   type SSEConversationSettingsUpdatedData,
   zodSSEEventDataByType,
 } from "src/shared/types/dto";
@@ -28,14 +29,31 @@ import {
   type ProjectContentFetchResponse,
   useBackendContentTranslationApi,
 } from "src/utils/api/contentTranslation/contentTranslation";
+import { isProjectTranslatedContentQueryKey } from "src/utils/api/contentTranslation/projectContentQuery";
 import {
+  getContentTranslationQueryKey,
   getConversationContentQueryPrefix,
   getConversationDisplayContentQueryPrefix,
-  getProjectContentQueryKey,
 } from "src/utils/api/contentTranslation/useContentTranslationQueries";
-import { updateConversationQueryCache } from "src/utils/api/post/useConversationQuery";
+import { getErrorLogContext } from "src/utils/api/errorLog";
+import { retainConversationRankingStatsUpdate } from "src/utils/api/post/rankingStatsUpdate";
+import {
+  applyConversationRankingStatsUpdate,
+  updateConversationQueryCache,
+} from "src/utils/api/post/useConversationQuery";
+import { isLiveSurveyResultsQueryKey } from "src/utils/api/survey/surveyQueryKeys";
 import { buildAuthorizationHeader } from "src/utils/crypto/ucan/operation";
 import { processEnv } from "src/utils/processEnv";
+import { abortIgnoringAbortError } from "src/utils/sse/abort";
+import {
+  getExponentialBackoffDelayMs,
+  parseRetryAfterMs,
+  shouldRetrySSEStatus,
+} from "src/utils/sse/backoff";
+import {
+  createSSEConnectionGeneration,
+  type SSEConnectionAttempt,
+} from "src/utils/sse/connectionGeneration";
 import {
   type ParsedSSEFrame,
   parseRawSSEFrame,
@@ -60,9 +78,12 @@ import {
 } from "./useRealtimeSSE.i18n";
 
 const SSE_CONNECTION_TIMEOUT_MS = 15_000;
-const SSE_DEFAULT_RETRY_DELAY_MS = 1_000;
+const SSE_INITIAL_RETRY_DELAY_MS = 1_000;
+const SSE_MAX_RETRY_DELAY_MS = 30_000;
+const SSE_MAX_SERVER_RETRY_HINT_MS = 300_000;
 const SSE_MAX_BUFFER_LENGTH = 1_000_000;
 const SSE_PROCESSED_ID_CACHE_SIZE = 1_000;
+const SURVEY_REFRESH_DEBOUNCE_MS = 300;
 // @fastify/sse sends comment heartbeats every 30s by default.
 // When the API stops ungracefully, reader.read() can hang indefinitely on a dead
 // TCP connection. This watchdog aborts the connection after 45s of silence (1.5x
@@ -84,7 +105,10 @@ type ProjectContentTranslationUpdatedData = Omit<
   SSEContentTranslationUpdatedData,
   "subject"
 > & {
-  subject: Extract<SSEContentTranslationUpdatedData["subject"], { kind: "project" }>;
+  subject: Extract<
+    SSEContentTranslationUpdatedData["subject"],
+    { kind: "project" }
+  >;
 };
 
 if (import.meta.hot) {
@@ -160,6 +184,29 @@ function isAnalysisCheckpointsQueryKey({
 }): boolean {
   return (
     queryKey[0] === "analysisCheckpoints" && queryKey[1] === conversationSlugId
+  );
+}
+
+function isConversationQueryKey({
+  queryKey,
+  conversationSlugId,
+}: {
+  queryKey: readonly unknown[];
+  conversationSlugId: string;
+}): boolean {
+  return queryKey[0] === "conversation" && queryKey[1] === conversationSlugId;
+}
+
+function isRankingCheckpointsQueryKey({
+  queryKey,
+  conversationSlugId,
+}: {
+  queryKey: readonly unknown[];
+  conversationSlugId: string;
+}): boolean {
+  return (
+    queryKey[0] === "ranking-stats-checkpoints" &&
+    queryKey[1] === conversationSlugId
   );
 }
 
@@ -270,6 +317,7 @@ export function useRealtimeSSE({
         checkpointViewSnapshotId: params.checkpointViewSnapshotId,
         aiLabelingEnabled: params.aiLabelingEnabled,
         displayLanguage: params.displayLanguage,
+        spokenLanguages: params.spokenLanguages,
         voteCount: undefined,
         freshness: params.freshness,
         analysisQueryKey: undefined,
@@ -284,12 +332,12 @@ export function useRealtimeSSE({
 
   const isConnected = ref(false);
   const isConnecting = ref(false);
-  let abortController: AbortController | null = null;
+  const connectionGeneration = createSSEConnectionGeneration();
   let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
   let shouldReconnect = true;
-  let connectionId = 0;
   let lastEventId: string | null = null;
-  let reconnectDelayMs = SSE_DEFAULT_RETRY_DELAY_MS;
+  let reconnectFailureCount = 0;
+  let sseRetryHintMs = 0;
   let offlineTimer: ReturnType<typeof setTimeout> | null = null;
   let heartbeatWatchdog: ReturnType<typeof setTimeout> | null = null;
   const processedSSEEventIds = new Set<string>();
@@ -302,7 +350,46 @@ export function useRealtimeSSE({
     string,
     number
   >();
-  const latestCommentStatsEventTimestampByConversationSlugId = new Map<
+  const surveyRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  function scheduleSurveyQueryRefresh(conversationSlugId: string): void {
+    void queryClient.invalidateQueries({
+      predicate: (query) =>
+        isLiveSurveyResultsQueryKey({
+          queryKey: query.queryKey,
+          conversationSlugId,
+        }),
+      refetchType: "none",
+    });
+    void queryClient.invalidateQueries({
+      queryKey: ["survey-completion-counts", conversationSlugId],
+      refetchType: "none",
+    });
+
+    const existingTimer = surveyRefreshTimers.get(conversationSlugId);
+    if (existingTimer !== undefined) {
+      return;
+    }
+    surveyRefreshTimers.set(
+      conversationSlugId,
+      setTimeout(() => {
+        surveyRefreshTimers.delete(conversationSlugId);
+        void queryClient.refetchQueries({
+          predicate: (query) =>
+            query.isActive() &&
+            isLiveSurveyResultsQueryKey({
+              queryKey: query.queryKey,
+              conversationSlugId,
+            }),
+        });
+        void queryClient.refetchQueries({
+          queryKey: ["survey-completion-counts", conversationSlugId],
+          type: "active",
+        });
+      }, SURVEY_REFRESH_DEBOUNCE_MS)
+    );
+  }
+  const latestStatsEventTimestampByConversationSlugId = new Map<
     string,
     number
   >();
@@ -355,22 +442,20 @@ export function useRealtimeSSE({
       return;
     }
 
-    // Claim a new generation — all prior connections are now stale.
-    // Placed AFTER the guard so a blocked connect() doesn't invalidate the active connection.
-    connectionId++;
-    const thisConnectionId = connectionId;
+    const connectionAttempt = connectionGeneration.start();
+    const { abortController: connectionAbortController } = connectionAttempt;
 
     let connectionTimeout: ReturnType<typeof setTimeout> | null = null;
+    let responseRetryAfterMs = 0;
 
     try {
       isConnecting.value = true;
 
-      abortController = new AbortController();
-
       // Abort if connection doesn't establish within timeout
       connectionTimeout = setTimeout(() => {
-        if (thisConnectionId !== connectionId) return;
-        abortController?.abort();
+        if (connectionGeneration.isCurrent(connectionAttempt)) {
+          abortIgnoringAbortError(connectionAbortController);
+        }
       }, SSE_CONNECTION_TIMEOUT_MS);
 
       const url = buildRealtimeStreamUrl();
@@ -387,6 +472,9 @@ export function useRealtimeSSE({
         const encodedUcan = await buildEncodedUcan("/api/v1/realtime/stream", {
           method: "GET",
         });
+        if (!connectionGeneration.isCurrent(connectionAttempt)) {
+          return;
+        }
         const authHeader = buildAuthorizationHeader(encodedUcan);
         Object.assign(headers, authHeader);
       }
@@ -394,29 +482,45 @@ export function useRealtimeSSE({
       const response = await fetch(url, {
         method: "GET",
         headers,
-        signal: abortController.signal,
+        signal: connectionAbortController.signal,
       });
+      if (!connectionGeneration.isCurrent(connectionAttempt)) {
+        return;
+      }
 
       clearTimeout(connectionTimeout);
       connectionTimeout = null;
 
+      responseRetryAfterMs =
+        parseRetryAfterMs({
+          value: response.headers.get("Retry-After"),
+          nowMs: Date.now(),
+          maximumDelayMs: SSE_MAX_SERVER_RETRY_HINT_MS,
+        }) ?? 0;
+
+      if (response.status === 204) {
+        isConnecting.value = false;
+        isConnected.value = false;
+        return;
+      }
+
       if (!response.ok) {
         if (response.status === 401) {
-          const didRefreshAuthState =
-            await refreshAuthStateAfterSSEUnauthorized();
-          if (didRefreshAuthState) {
-            isConnecting.value = false;
-            isConnected.value = false;
-            setNetworkOffline(false);
-            if (
-              thisConnectionId === connectionId &&
-              shouldReconnect &&
-              shouldMaintainConnection()
-            ) {
-              scheduleReconnect();
-            }
+          await refreshAuthStateAfterSSEUnauthorized();
+          if (!connectionGeneration.isCurrent(connectionAttempt)) {
             return;
           }
+          isConnecting.value = false;
+          isConnected.value = false;
+          if (shouldReconnect && shouldMaintainConnection()) {
+            scheduleReconnect({ minimumDelayMs: responseRetryAfterMs });
+          }
+          return;
+        }
+        if (!shouldRetrySSEStatus(response.status)) {
+          isConnecting.value = false;
+          isConnected.value = false;
+          return;
         }
         throw new Error(`SSE connection failed: ${String(response.status)}`);
       }
@@ -427,7 +531,7 @@ export function useRealtimeSSE({
 
       isConnected.value = true;
       isConnecting.value = false;
-      resetHeartbeatWatchdog();
+      resetHeartbeatWatchdog(connectionAttempt);
 
       // Clear offline timer if SSE reconnected quickly (< 3s)
       if (offlineTimer) {
@@ -436,7 +540,7 @@ export function useRealtimeSSE({
       }
 
       setNetworkOffline(false);
-      refreshActiveConversationQueriesAfterReconnect({
+      void refreshActiveConversationQueriesAfterReconnect({
         conversationSlugId: getSubscribedConversationSlugId(),
       });
 
@@ -447,8 +551,11 @@ export function useRealtimeSSE({
 
       while (true) {
         const { done, value } = await reader.read();
+        if (!connectionGeneration.isCurrent(connectionAttempt)) {
+          return;
+        }
         if (done) break;
-        resetHeartbeatWatchdog();
+        resetHeartbeatWatchdog(connectionAttempt);
 
         buffer += decoder.decode(value, { stream: true });
         if (buffer.length > SSE_MAX_BUFFER_LENGTH) {
@@ -468,30 +575,34 @@ export function useRealtimeSSE({
       }
 
       // Stream ended normally — check staleness before touching shared state
+      if (!connectionGeneration.isCurrent(connectionAttempt)) return;
       clearHeartbeatWatchdog();
-      if (thisConnectionId !== connectionId) return;
 
       isConnected.value = false;
       scheduleOfflineTimer();
       if (shouldReconnect && shouldMaintainConnection()) {
-        scheduleReconnect();
+        scheduleReconnect({ minimumDelayMs: 0 });
       }
     } catch {
-      clearHeartbeatWatchdog();
       if (connectionTimeout) {
         clearTimeout(connectionTimeout);
       }
 
       // Stale connection — a newer connect() has taken over.
       // Don't touch shared state or schedule reconnects.
-      if (thisConnectionId !== connectionId) return;
+      if (!connectionGeneration.isCurrent(connectionAttempt)) return;
 
+      clearHeartbeatWatchdog();
       isConnected.value = false;
       isConnecting.value = false;
       scheduleOfflineTimer();
 
       if (shouldReconnect && shouldMaintainConnection()) {
-        scheduleReconnect();
+        scheduleReconnect({ minimumDelayMs: responseRetryAfterMs });
+      }
+    } finally {
+      if (connectionTimeout !== null) {
+        clearTimeout(connectionTimeout);
       }
     }
   }
@@ -547,6 +658,10 @@ export function useRealtimeSSE({
 
   function parseSSEEvent(raw: string): ParsedRealtimeSSEEvent | undefined {
     const frame = parseRawSSEFrame(raw);
+    if (frame.kind === "retry") {
+      sseRetryHintMs = Math.min(frame.retry, SSE_MAX_SERVER_RETRY_HINT_MS);
+      return undefined;
+    }
     if (frame.kind === "comment") {
       return undefined;
     }
@@ -555,7 +670,7 @@ export function useRealtimeSSE({
       updateLastEventId(frame.id);
     }
     if (frame.retry !== null) {
-      reconnectDelayMs = frame.retry;
+      sseRetryHintMs = Math.min(frame.retry, SSE_MAX_SERVER_RETRY_HINT_MS);
     }
 
     const data = frame.data.trim();
@@ -579,7 +694,10 @@ export function useRealtimeSSE({
           logInvalidSSEPayload({ event: frame.event, error: result.error });
           return undefined;
         }
-        return { id: frame.id, event: { event: frame.event, data: result.data } };
+        return {
+          id: frame.id,
+          event: { event: frame.event, data: result.data },
+        };
       }
       case "notification": {
         const result = zodSSEEventDataByType.notification.safeParse(rawData);
@@ -587,7 +705,10 @@ export function useRealtimeSSE({
           logInvalidSSEPayload({ event: frame.event, error: result.error });
           return undefined;
         }
-        return { id: frame.id, event: { event: frame.event, data: result.data } };
+        return {
+          id: frame.id,
+          event: { event: frame.event, data: result.data },
+        };
       }
       case "new_conversation": {
         const result =
@@ -596,7 +717,10 @@ export function useRealtimeSSE({
           logInvalidSSEPayload({ event: frame.event, error: result.error });
           return undefined;
         }
-        return { id: frame.id, event: { event: frame.event, data: result.data } };
+        return {
+          id: frame.id,
+          event: { event: frame.event, data: result.data },
+        };
       }
       case "new_opinion": {
         const result = zodSSEEventDataByType.new_opinion.safeParse(rawData);
@@ -604,7 +728,10 @@ export function useRealtimeSSE({
           logInvalidSSEPayload({ event: frame.event, error: result.error });
           return undefined;
         }
-        return { id: frame.id, event: { event: frame.event, data: result.data } };
+        return {
+          id: frame.id,
+          event: { event: frame.event, data: result.data },
+        };
       }
       case "popular_conversation": {
         const result =
@@ -613,7 +740,10 @@ export function useRealtimeSSE({
           logInvalidSSEPayload({ event: frame.event, error: result.error });
           return undefined;
         }
-        return { id: frame.id, event: { event: frame.event, data: result.data } };
+        return {
+          id: frame.id,
+          event: { event: frame.event, data: result.data },
+        };
       }
       case "conversation_analysis_updated": {
         const result =
@@ -624,7 +754,10 @@ export function useRealtimeSSE({
           logInvalidSSEPayload({ event: frame.event, error: result.error });
           return undefined;
         }
-        return { id: frame.id, event: { event: frame.event, data: result.data } };
+        return {
+          id: frame.id,
+          event: { event: frame.event, data: result.data },
+        };
       }
       case "conversation_comment_stats_updated": {
         const result =
@@ -635,7 +768,24 @@ export function useRealtimeSSE({
           logInvalidSSEPayload({ event: frame.event, error: result.error });
           return undefined;
         }
-        return { id: frame.id, event: { event: frame.event, data: result.data } };
+        return {
+          id: frame.id,
+          event: { event: frame.event, data: result.data },
+        };
+      }
+      case "conversation_ranking_stats_updated": {
+        const result =
+          zodSSEEventDataByType.conversation_ranking_stats_updated.safeParse(
+            rawData
+          );
+        if (!result.success) {
+          logInvalidSSEPayload({ event: frame.event, error: result.error });
+          return undefined;
+        }
+        return {
+          id: frame.id,
+          event: { event: frame.event, data: result.data },
+        };
       }
       case "conversation_settings_updated": {
         const result =
@@ -646,7 +796,22 @@ export function useRealtimeSSE({
           logInvalidSSEPayload({ event: frame.event, error: result.error });
           return undefined;
         }
-        return { id: frame.id, event: { event: frame.event, data: result.data } };
+        return {
+          id: frame.id,
+          event: { event: frame.event, data: result.data },
+        };
+      }
+      case "conversation_survey_updated": {
+        const result =
+          zodSSEEventDataByType.conversation_survey_updated.safeParse(rawData);
+        if (!result.success) {
+          logInvalidSSEPayload({ event: frame.event, error: result.error });
+          return undefined;
+        }
+        return {
+          id: frame.id,
+          event: { event: frame.event, data: result.data },
+        };
       }
       case "content_translation_updated": {
         const result =
@@ -655,15 +820,22 @@ export function useRealtimeSSE({
           logInvalidSSEPayload({ event: frame.event, error: result.error });
           return undefined;
         }
-        return { id: frame.id, event: { event: frame.event, data: result.data } };
+        return {
+          id: frame.id,
+          event: { event: frame.event, data: result.data },
+        };
       }
       case "subscription_ready": {
-        const result = zodSSEEventDataByType.subscription_ready.safeParse(rawData);
+        const result =
+          zodSSEEventDataByType.subscription_ready.safeParse(rawData);
         if (!result.success) {
           logInvalidSSEPayload({ event: frame.event, error: result.error });
           return undefined;
         }
-        return { id: frame.id, event: { event: frame.event, data: result.data } };
+        return {
+          id: frame.id,
+          event: { event: frame.event, data: result.data },
+        };
       }
       case "shutdown": {
         const result = zodSSEEventDataByType.shutdown.safeParse(rawData);
@@ -671,7 +843,10 @@ export function useRealtimeSSE({
           logInvalidSSEPayload({ event: frame.event, error: result.error });
           return undefined;
         }
-        return { id: frame.id, event: { event: frame.event, data: result.data } };
+        return {
+          id: frame.id,
+          event: { event: frame.event, data: result.data },
+        };
       }
       default:
         console.error(`Unknown SSE event: ${frame.event}`);
@@ -739,7 +914,10 @@ export function useRealtimeSSE({
       const result = await refreshAuthState();
       return result.authStateChanged || result.needsCacheRefresh;
     } catch (error) {
-      console.error("Failed to refresh auth state after SSE 401", error);
+      console.error(
+        "Failed to refresh auth state after SSE 401",
+        getErrorLogContext(error)
+      );
       return false;
     }
   }
@@ -867,6 +1045,7 @@ export function useRealtimeSSE({
     try {
       switch (sseEvent.event) {
         case "connected": {
+          reconnectFailureCount = 0;
           break;
         }
         case "notification": {
@@ -899,6 +1078,29 @@ export function useRealtimeSSE({
           updateCommentStatsFromEvent(sseEvent.data);
           break;
         }
+        case "conversation_ranking_stats_updated": {
+          updateRankingStatsFromEvent(sseEvent.data);
+          break;
+        }
+        case "conversation_survey_updated": {
+          const data = sseEvent.data;
+          scheduleSurveyQueryRefresh(data.conversationSlugId);
+          if (data.configChanged) {
+            void queryClient.invalidateQueries({
+              queryKey: ["conversation", data.conversationSlugId],
+              refetchType: "active",
+            });
+            void queryClient.invalidateQueries({
+              queryKey: ["survey-form", data.conversationSlugId],
+              refetchType: "active",
+            });
+            void queryClient.invalidateQueries({
+              queryKey: ["survey-status", data.conversationSlugId],
+              refetchType: "active",
+            });
+          }
+          break;
+        }
         case "popular_conversation": {
           const data = sseEvent.data;
           homeFeedStore.onPopularConversationUpdate(
@@ -919,7 +1121,11 @@ export function useRealtimeSSE({
             refetchType: "none",
           });
           void queryClient.invalidateQueries({
-            queryKey: ["survey-results-aggregated", data.conversationSlugId],
+            predicate: (query) =>
+              isLiveSurveyResultsQueryKey({
+                queryKey: query.queryKey,
+                conversationSlugId: data.conversationSlugId,
+              }),
             refetchType: "active",
           });
           void queryClient.invalidateQueries({
@@ -1082,9 +1288,39 @@ export function useRealtimeSSE({
     data: SSEContentTranslationUpdatedData
   ): Promise<void> {
     if (isProjectContentTranslationUpdatedData(data)) {
+      if (data.targetLanguageCode !== languageStore.displayLanguage) {
+        return;
+      }
       await updateProjectPageContentTranslation(data);
+      if (data.targetLanguageCode !== languageStore.displayLanguage) {
+        return;
+      }
       if (data.status === "failed") {
+        updateProjectContentQueryStatus({ data, status: "failed" });
         publishContentTranslationFailed(data);
+      } else {
+        void queryClient.invalidateQueries({
+          predicate: (query) =>
+            isProjectTranslatedContentQueryKey({
+              queryKey: query.queryKey,
+              projectSlug: data.subject.projectSlug,
+              sourceVersion: data.subject.sourceVersion,
+              targetLanguageCode: data.targetLanguageCode,
+            }),
+          refetchType: "active",
+        });
+        void queryClient.invalidateQueries({
+          queryKey: getContentTranslationQueryKey({
+            subject: {
+              kind: "project",
+              projectSlug: data.subject.projectSlug,
+              sourceVersion: data.subject.sourceVersion,
+            },
+            targetLanguageCode: data.targetLanguageCode,
+          }),
+          refetchType: "none",
+        });
+        publishContentTranslationUpdated(data);
       }
       return;
     }
@@ -1147,37 +1383,43 @@ export function useRealtimeSSE({
     try {
       response = await fetchProjectContent({
         projectSlug: data.subject.projectSlug,
-        sourceVersion: data.sourceVersion,
+        conversationSlugId: undefined,
+        sourceVersion: data.subject.sourceVersion,
         mode: "translated",
         requestMode: "read_existing",
       });
     } catch (error) {
-      console.warn("Failed to fetch project translation after SSE update", error);
+      console.warn(
+        "Failed to fetch project translation after SSE update",
+        getErrorLogContext(error)
+      );
       return;
     }
 
+    if (data.targetLanguageCode !== languageStore.displayLanguage) {
+      return;
+    }
+    if (response.sourceVersion !== data.subject.sourceVersion) {
+      return;
+    }
     if (response.status !== "available") {
       updateProjectPageDisplayContentStatus({ data, status: response.status });
       return;
     }
 
-    queryClient.setQueryData<ProjectContentFetchResponse>(
-      getProjectContentQueryKey({
-        projectSlug: data.subject.projectSlug,
-        sourceVersion: data.sourceVersion,
-        mode: "translated",
-        targetLanguageCode: data.targetLanguageCode,
-        spokenLanguages: languageStore.spokenLanguages,
-      }),
-      response
-    );
-
     queryClient.setQueriesData<FetchProjectPageResponse>(
       {
-        predicate: (query) => isProjectPageQueryForTranslation({ queryKey: query.queryKey, data }),
+        predicate: (query) =>
+          isProjectPageQueryForTranslation({ queryKey: query.queryKey, data }),
       },
       (previousData) => {
         if (previousData === undefined) {
+          return previousData;
+        }
+        if (
+          previousData.project.displayContent.sourceVersion !==
+          data.subject.sourceVersion
+        ) {
           return previousData;
         }
         return {
@@ -1191,6 +1433,42 @@ export function useRealtimeSSE({
     );
   }
 
+  function updateProjectContentQueryStatus({
+    data,
+    status,
+  }: {
+    data: ProjectContentTranslationUpdatedData;
+    status: Exclude<ProjectContentFetchResponse["status"], "available">;
+  }): void {
+    queryClient.setQueriesData<ProjectContentFetchResponse>(
+      {
+        predicate: (query) =>
+          isProjectTranslatedContentQueryKey({
+            queryKey: query.queryKey,
+            projectSlug: data.subject.projectSlug,
+            sourceVersion: data.subject.sourceVersion,
+            targetLanguageCode: data.targetLanguageCode,
+          }),
+      },
+      (displayContent) => {
+        if (
+          displayContent === undefined ||
+          displayContent.sourceVersion !== data.subject.sourceVersion ||
+          displayContent.translationControl === null
+        ) {
+          return displayContent;
+        }
+        const translationControl = {
+          ...displayContent.translationControl,
+          status,
+        };
+        return displayContent.status === "available"
+          ? { ...displayContent, translationControl }
+          : { ...displayContent, status, translationControl };
+      }
+    );
+  }
+
   function updateProjectPageDisplayContentStatus({
     data,
     status,
@@ -1200,7 +1478,8 @@ export function useRealtimeSSE({
   }): void {
     queryClient.setQueriesData<FetchProjectPageResponse>(
       {
-        predicate: (query) => isProjectPageQueryForTranslation({ queryKey: query.queryKey, data }),
+        predicate: (query) =>
+          isProjectPageQueryForTranslation({ queryKey: query.queryKey, data }),
       },
       (previousData) => {
         const displayContent = previousData?.project.displayContent;
@@ -1210,7 +1489,7 @@ export function useRealtimeSSE({
         const translationControl = displayContent.translationControl;
         if (
           translationControl === null ||
-          displayContent.sourceVersion !== data.sourceVersion
+          displayContent.sourceVersion !== data.subject.sourceVersion
         ) {
           return previousData;
         }
@@ -1326,18 +1605,9 @@ export function useRealtimeSSE({
   function updateCommentStatsFromEvent(
     data: SSEConversationCommentStatsUpdatedData
   ): void {
-    const previousTimestamp =
-      latestCommentStatsEventTimestampByConversationSlugId.get(
-        data.conversationSlugId
-      );
-    if (previousTimestamp !== undefined && previousTimestamp > data.timestamp) {
+    if (!recordConversationStatsEventTimestamp(data)) {
       return;
     }
-
-    latestCommentStatsEventTimestampByConversationSlugId.set(
-      data.conversationSlugId,
-      data.timestamp
-    );
 
     const stats: FetchCommentStatsResponse = {
       conversationViewSnapshotId: data.conversationViewSnapshotId,
@@ -1390,6 +1660,49 @@ export function useRealtimeSSE({
     });
 
     updateVotedVisibleOpinionCountsFromEvent(data);
+  }
+
+  function recordConversationStatsEventTimestamp(data: {
+    conversationSlugId: string;
+    timestamp: number;
+  }): boolean {
+    const previousTimestamp = latestStatsEventTimestampByConversationSlugId.get(
+      data.conversationSlugId
+    );
+    if (previousTimestamp !== undefined && previousTimestamp > data.timestamp) {
+      return false;
+    }
+    latestStatsEventTimestampByConversationSlugId.set(
+      data.conversationSlugId,
+      data.timestamp
+    );
+    return true;
+  }
+
+  function updateRankingStatsFromEvent(
+    data: SSEConversationRankingStatsUpdatedData
+  ): void {
+    if (!retainConversationRankingStatsUpdate({ queryClient, data })) {
+      if (data.checkpointChanged) {
+        void queryClient.invalidateQueries({
+          queryKey: ["ranking-stats-checkpoints", data.conversationSlugId],
+        });
+      }
+      return;
+    }
+
+    updateConversationQueryCache({
+      queryClient,
+      conversationSlugId: data.conversationSlugId,
+      updateConversation: (conversation) =>
+        applyConversationRankingStatsUpdate({ conversation, data }),
+    });
+
+    if (data.checkpointChanged) {
+      void queryClient.invalidateQueries({
+        queryKey: ["ranking-stats-checkpoints", data.conversationSlugId],
+      });
+    }
   }
 
   function updateVotedVisibleOpinionCountsFromEvent(
@@ -1453,22 +1766,34 @@ export function useRealtimeSSE({
     );
   }
 
-  function refreshActiveConversationQueriesAfterReconnect({
+  async function refreshActiveConversationQueriesAfterReconnect({
     conversationSlugId,
   }: {
     conversationSlugId: string | undefined;
-  }): void {
+  }): Promise<void> {
     if (conversationSlugId === undefined) {
       return;
     }
 
-    void queryClient.refetchQueries({
+    await queryClient.refetchQueries({
       predicate: (query) =>
         query.isActive() &&
-        (isAnalysisCheckpointsQueryKey({
+        isConversationQueryKey({
+          queryKey: query.queryKey,
+          conversationSlugId,
+        }),
+    });
+    await queryClient.refetchQueries({
+      predicate: (query) =>
+        query.isActive() &&
+        (isRankingCheckpointsQueryKey({
           queryKey: query.queryKey,
           conversationSlugId,
         }) ||
+          isAnalysisCheckpointsQueryKey({
+            queryKey: query.queryKey,
+            conversationSlugId,
+          }) ||
           isCommentStatsQueryKey({
             queryKey: query.queryKey,
             conversationSlugId,
@@ -1480,12 +1805,14 @@ export function useRealtimeSSE({
     });
   }
 
-  function resetHeartbeatWatchdog() {
+  function resetHeartbeatWatchdog(
+    connectionAttempt: SSEConnectionAttempt
+  ): void {
     if (heartbeatWatchdog) clearTimeout(heartbeatWatchdog);
     heartbeatWatchdog = setTimeout(() => {
       heartbeatWatchdog = null;
-      if (abortController) {
-        abortController.abort();
+      if (connectionGeneration.isCurrent(connectionAttempt)) {
+        abortIgnoringAbortError(connectionAttempt.abortController);
       }
     }, SSE_HEARTBEAT_TIMEOUT_MS);
   }
@@ -1497,7 +1824,11 @@ export function useRealtimeSSE({
     }
   }
 
-  function scheduleReconnect() {
+  function scheduleReconnect({
+    minimumDelayMs,
+  }: {
+    minimumDelayMs: number;
+  }): void {
     if (!shouldMaintainConnection()) {
       return;
     }
@@ -1506,11 +1837,18 @@ export function useRealtimeSSE({
       clearTimeout(reconnectTimeout);
     }
 
-    // Fixed 1s retry with small jitter (0-250ms) to avoid thundering herd
-    const jitter = Math.random() * 250;
-    const delay = reconnectDelayMs + jitter;
+    const delay = getExponentialBackoffDelayMs({
+      failureCount: reconnectFailureCount,
+      initialDelayMs: SSE_INITIAL_RETRY_DELAY_MS,
+      maximumDelayMs: SSE_MAX_RETRY_DELAY_MS,
+      minimumDelayMs: Math.max(minimumDelayMs, sseRetryHintMs),
+      multiplier: 2,
+      randomUnitInterval: Math.random(),
+    });
+    reconnectFailureCount += 1;
 
     reconnectTimeout = setTimeout(() => {
+      reconnectTimeout = null;
       if (shouldReconnect && shouldMaintainConnection()) {
         void connect();
       }
@@ -1529,6 +1867,7 @@ export function useRealtimeSSE({
   }
 
   function forceReconnect() {
+    reconnectFailureCount = 0;
     disconnectAndAllowLaterReconnect();
 
     if (shouldMaintainConnection()) {
@@ -1537,18 +1876,13 @@ export function useRealtimeSSE({
   }
 
   function disconnect() {
-    connectionId++; // Invalidate any in-flight connect() catch handler
+    connectionGeneration.invalidate();
     shouldReconnect = false;
     clearHeartbeatWatchdog();
 
     if (reconnectTimeout) {
       clearTimeout(reconnectTimeout);
       reconnectTimeout = null;
-    }
-
-    if (abortController) {
-      abortController.abort();
-      abortController = null;
     }
 
     // Only clear the pending offline timer — don't touch global offline state.
@@ -1566,13 +1900,14 @@ export function useRealtimeSSE({
   // hidden. On resume, stale timers and reader.read() rejections fire at once,
   // causing false offline detection. The standard pattern (Socket.IO, Pusher):
   // disconnect proactively on hide, reconnect cleanly on show.
-  // disconnect() increments connectionId, making any in-flight catch handler
-  // stale — it can never schedule an offline timer or touch shared state.
+  // disconnect() invalidates the connection generation, so in-flight handlers
+  // cannot schedule an offline timer or touch shared state.
   function onVisibilityChange() {
     if (document.hidden) {
       disconnectAndAllowLaterReconnect();
     } else {
       if (shouldMaintainConnection()) {
+        reconnectFailureCount = 0;
         void connect();
       }
     }
@@ -1645,10 +1980,16 @@ export function useRealtimeSSE({
   // Wait for auth initialization first so check-login-status is never queued
   // behind long-lived SSE connections.
   watch(
-    () => [authStore.isAuthInitialized, authStore.isGuestOrLoggedIn] as const,
-    async ([isAuthInitialized, isAuthenticated], previousState) => {
+    () =>
+      [
+        authStore.isAuthInitialized,
+        authStore.isGuestOrLoggedIn,
+        authStore.userId,
+      ] as const,
+    async ([isAuthInitialized, isAuthenticated, userId], previousState) => {
       const wasAuthInitialized = previousState?.[0];
       const wasAuthenticated = previousState?.[1];
+      const previousUserId = previousState?.[2];
       if (!isAuthInitialized) {
         disconnectAndAllowLaterReconnect();
         return;
@@ -1656,8 +1997,13 @@ export function useRealtimeSSE({
 
       if (
         isAuthInitialized !== wasAuthInitialized ||
-        isAuthenticated !== wasAuthenticated
+        isAuthenticated !== wasAuthenticated ||
+        userId !== previousUserId
       ) {
+        if (userId !== previousUserId) {
+          lastEventId = null;
+        }
+        reconnectFailureCount = 0;
         disconnectAndAllowLaterReconnect();
         if (shouldMaintainConnection()) {
           await connect();
@@ -1669,6 +2015,10 @@ export function useRealtimeSSE({
 
   // Cleanup on unmount
   onUnmounted(() => {
+    for (const timer of surveyRefreshTimers.values()) {
+      clearTimeout(timer);
+    }
+    surveyRefreshTimers.clear();
     cleanupRealtimeSSE();
   });
 

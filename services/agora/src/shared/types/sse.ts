@@ -6,10 +6,10 @@ import {
 } from "../languages.js";
 import {
     zodEventSlug,
-    zodContentTranslationSubject,
     zodNotificationItem,
     zodParticipationMode,
     zodPreferredOpinionGroupCount,
+    zodProjectSlug,
     zodSlugId,
 } from "./zod.js";
 
@@ -181,6 +181,30 @@ export type SSEConversationCommentStatsUpdatedData = z.infer<
 >;
 
 /**
+ * Data sent when a ranking conversation's current aggregate counters changed.
+ */
+export const zodSSEConversationRankingStatsUpdatedData = z
+    .object({
+        conversationSlugId: zodSlugId,
+        rankingStatsSnapshotId: z.number().int().positive(),
+        checkpointChanged: z.boolean(),
+        opinionCount: z.number().int().nonnegative(),
+        voteCount: z.number().int().nonnegative(),
+        participantCount: z.number().int().nonnegative(),
+        totalOpinionCount: z.number().int().nonnegative(),
+        totalVoteCount: z.number().int().nonnegative(),
+        totalParticipantCount: z.number().int().nonnegative(),
+        moderatedOpinionCount: z.literal(0),
+        hiddenOpinionCount: z.literal(0),
+        isClosed: z.boolean(),
+        timestamp: z.number(),
+    })
+    .strict();
+export type SSEConversationRankingStatsUpdatedData = z.infer<
+    typeof zodSSEConversationRankingStatsUpdatedData
+>;
+
+/**
  * Data sent when conversation settings that affect live views change.
  */
 export const zodSSEConversationSettingsData = z
@@ -208,12 +232,63 @@ export type SSEConversationSettingsUpdatedData = z.infer<
     typeof zodSSEConversationSettingsUpdatedData
 >;
 
+export const zodSSEConversationSurveyUpdatedData = z
+    .object({
+        conversationSlugId: zodSlugId,
+        configChanged: z.boolean(),
+        timestamp: z.number(),
+    })
+    .strict();
+export type SSEConversationSurveyUpdatedData = z.infer<
+    typeof zodSSEConversationSurveyUpdatedData
+>;
+
+const zodSSEContentTranslationSubject = z.discriminatedUnion("kind", [
+    z
+        .object({
+            kind: z.literal("conversation"),
+            conversationSlugId: zodSlugId,
+            sourceVersion: z.uuid(),
+        })
+        .strict(),
+    z
+        .object({
+            kind: z.literal("opinion"),
+            conversationSlugId: zodSlugId,
+            opinionSlugId: zodSlugId,
+            sourceVersion: z.uuid(),
+        })
+        .strict(),
+    z
+        .object({
+            kind: z.literal("survey_question"),
+            conversationSlugId: zodSlugId,
+            questionSlugId: zodSlugId,
+            sourceVersion: z.uuid(),
+        })
+        .strict(),
+    z
+        .object({
+            kind: z.literal("project"),
+            projectSlug: zodProjectSlug,
+            sourceVersion: z.uuid(),
+        })
+        .strict(),
+    z
+        .object({
+            kind: z.literal("ranking_item"),
+            conversationSlugId: zodSlugId,
+            itemSlugId: zodSlugId,
+            sourceVersion: z.uuid(),
+        })
+        .strict(),
+]);
+
 export const zodSSEContentTranslationUpdatedData = z
     .object({
-        subject: zodContentTranslationSubject,
+        subject: zodSSEContentTranslationSubject,
         targetLanguageCode: ZodSupportedDisplayLanguageCodes,
         status: z.enum(["completed", "failed"]),
-        sourceVersion: z.uuid(),
         timestamp: z.number(),
     })
     .strict();
@@ -250,7 +325,10 @@ export const zodSSEEventDataByType = {
     conversation_analysis_updated: zodSSEConversationAnalysisUpdatedData,
     conversation_comment_stats_updated:
         zodSSEConversationCommentStatsUpdatedData,
+    conversation_ranking_stats_updated:
+        zodSSEConversationRankingStatsUpdatedData,
     conversation_settings_updated: zodSSEConversationSettingsUpdatedData,
+    conversation_survey_updated: zodSSEConversationSurveyUpdatedData,
     content_translation_updated: zodSSEContentTranslationUpdatedData,
     subscription_ready: zodSSESubscriptionReadyData,
     shutdown: zodSSEShutdownData,
@@ -282,8 +360,12 @@ export type SSEConversationAnalysisUpdatedEvent =
     SSEEvent<"conversation_analysis_updated">;
 export type SSEConversationCommentStatsUpdatedEvent =
     SSEEvent<"conversation_comment_stats_updated">;
+export type SSEConversationRankingStatsUpdatedEvent =
+    SSEEvent<"conversation_ranking_stats_updated">;
 export type SSEConversationSettingsUpdatedEvent =
     SSEEvent<"conversation_settings_updated">;
+export type SSEConversationSurveyUpdatedEvent =
+    SSEEvent<"conversation_survey_updated">;
 export type SSEContentTranslationUpdatedEvent =
     SSEEvent<"content_translation_updated">;
 export type SSESubscriptionReadyEvent = SSEEvent<"subscription_ready">;
@@ -300,7 +382,9 @@ export type AnySSEEvent =
     | SSEPopularConversationEvent
     | SSEConversationAnalysisUpdatedEvent
     | SSEConversationCommentStatsUpdatedEvent
+    | SSEConversationRankingStatsUpdatedEvent
     | SSEConversationSettingsUpdatedEvent
+    | SSEConversationSurveyUpdatedEvent
     | SSEContentTranslationUpdatedEvent
     | SSESubscriptionReadyEvent
     | SSEShutdownEvent;

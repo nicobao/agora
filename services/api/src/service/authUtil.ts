@@ -37,15 +37,19 @@ import * as authService from "@/service/auth.js";
 import { log } from "@/app.js";
 import { hasConversationCapability } from "@/service/projectAccess.js";
 
-interface InfoDevice {
-    userAgent: string;
-    userId: string;
-    sessionExpiry: Date;
-}
-
 interface IsSiteModeratorParams {
     db: PostgresDatabase;
     userId: string;
+}
+
+export function isActiveRegisteredDeviceStatus(
+    deviceStatus: DeviceLoginStatusInternal,
+): boolean {
+    return (
+        deviceStatus.isKnown &&
+        deviceStatus.isRegistered &&
+        deviceStatus.isLoggedIn
+    );
 }
 
 export async function isSiteModeratorAccount({
@@ -224,7 +228,10 @@ export async function isUserPartOfOrganizationById({
         .from(organizationMembershipTable)
         .innerJoin(
             organizationTable,
-            eq(organizationTable.id, organizationMembershipTable.organizationId),
+            eq(
+                organizationTable.id,
+                organizationMembershipTable.organizationId,
+            ),
         )
         .where(
             and(
@@ -483,29 +490,6 @@ export async function getEmailsFromUserId(
     } else {
         return results.map((result) => result.email);
     }
-}
-
-export async function getInfoFromDevice(
-    db: PostgresDatabase,
-    didWrite: string,
-): Promise<InfoDevice> {
-    const results = await db
-        .select({
-            userId: userTable.id,
-            userAgent: deviceTable.userAgent,
-            sessionExpiry: deviceTable.sessionExpiry,
-        })
-        .from(userTable)
-        .innerJoin(deviceTable, eq(deviceTable.userId, userTable.id))
-        .where(eq(deviceTable.didWrite, didWrite));
-    if (results.length === 0) {
-        throw new Error("This didWrite is not registered to any user");
-    }
-    return {
-        userId: results[0].userId,
-        userAgent: results[0].userAgent,
-        sessionExpiry: results[0].sessionExpiry,
-    };
 }
 
 export async function isEmailAssociatedWithDevice(

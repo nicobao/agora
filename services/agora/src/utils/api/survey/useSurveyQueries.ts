@@ -10,18 +10,22 @@ import type {
 } from "src/shared/types/dto";
 import {
   type AnalysisView,
-  type SurveyAnswerSubmission,
+  type SurveyAnswerDraft,
   type SurveyConfig,
   type SurveyGateSummary,
   type SurveyRouteResolution,
 } from "src/shared/types/zod";
 import { useBackendAuthApi } from "src/utils/api/auth";
-import { isSurveyAnswerSubmittable } from "src/utils/survey/answer";
+import {
+  buildSurveyAnswerSubmission,
+  isSurveyAnswerSubmittable,
+} from "src/utils/survey/answer";
 import { useNotify } from "src/utils/ui/notify";
 import { computed, type MaybeRefOrGetter, toValue } from "vue";
 
 import { updateConversationQueryCache } from "../post/useConversationQuery";
 import { useBackendSurveyApi } from "./survey";
+import { isLiveSurveyResultsQueryKey } from "./surveyQueryKeys";
 
 export type SurveyFormData = Extract<SurveyFormFetchResponse, { success: true }>;
 type SurveyFormQuestion = SurveyFormData["questions"][number];
@@ -149,7 +153,7 @@ function updateSurveyQuestionWithSubmittedAnswer({
   answer,
 }: {
   question: SurveyFormQuestion;
-  answer: SurveyAnswerSubmission | null;
+  answer: SurveyAnswerDraft | null;
 }): SurveyFormQuestion {
   if (answer === null) {
     return {
@@ -187,7 +191,7 @@ function updateSurveyFormAnswerCaches({
   queryClient: QueryClient;
   conversationSlugId: string;
   questionSlugId: string;
-  answer: SurveyAnswerSubmission | null;
+  answer: SurveyAnswerDraft | null;
   surveyGate: SurveyGateSummary;
 }): void {
   queryClient.setQueriesData<SurveyFormData>(
@@ -279,7 +283,11 @@ async function markSurveyViewerQueriesStale({
         refetchType: "none",
       }),
       queryClient.invalidateQueries({
-        queryKey: ["survey-results-aggregated", conversationSlugId],
+        predicate: (query) =>
+          isLiveSurveyResultsQueryKey({
+            queryKey: query.queryKey,
+            conversationSlugId,
+          }),
         refetchType: "none",
       })
     );
@@ -425,12 +433,12 @@ export function useSurveyAnswerSaveMutation({
       answer,
     }: {
       questionSlugId: string;
-      answer: SurveyAnswerSubmission | null;
+      answer: SurveyAnswerDraft | null;
     }) => {
       const response = await saveSurveyAnswer({
         conversationSlugId: toValue(conversationSlugId),
         questionSlugId,
-        answer,
+        answer: answer === null ? null : buildSurveyAnswerSubmission(answer),
       });
       if (response.status !== "success") {
         throw new Error("Failed to save survey answer");
@@ -460,6 +468,7 @@ export function useSurveyAnswerSaveMutation({
       await markSurveyViewerQueriesStale({
         queryClient,
         conversationSlugId: slugId,
+        includeDerivedSurveyQueries: true,
       });
     },
     retry: false,
@@ -506,6 +515,7 @@ export function useSurveyWithdrawMutation({
       await markSurveyViewerQueriesStale({
         queryClient,
         conversationSlugId: slugId,
+        includeDerivedSurveyQueries: true,
       });
     },
     retry: false,

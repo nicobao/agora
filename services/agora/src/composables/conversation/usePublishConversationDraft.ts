@@ -1,4 +1,5 @@
 import type { ConversationDraft } from "src/composables/conversation/draft/conversationDraft.types";
+import { resolveDraftPublicationIdentityAtBoundary } from "src/composables/conversation/draft/conversationDraft.utils";
 import { useComponentI18n } from "src/composables/ui/useComponentI18n";
 import {
   type CreateConversationTranslations,
@@ -12,6 +13,7 @@ import {
 import type { SurveyConfig } from "src/shared/types/zod";
 import { useNavigationStore } from "src/stores/navigation";
 import { useNewPostDraftsStore } from "src/stores/newConversationDrafts";
+import { useUserStore } from "src/stores/user";
 import { useCommonApi } from "src/utils/api/common";
 import { useMaxDiffApi } from "src/utils/api/maxdiff/maxdiff";
 import { useBackendPostApi } from "src/utils/api/post/post";
@@ -26,12 +28,21 @@ interface PublishConversationDraftParams {
   invalidSurveyMessage: string;
   defaultErrorMessage: string;
   onInvalidSurvey?: () => void;
+  onSeedOpinionFailure?: (failure: SeedOpinionCreateFailure) => void;
   beforeSuccessNavigation?: () => void;
 }
 
-type CreateConversationFailureReason = Extract<
+type CreateConversationFailure = Extract<
   CreateNewConversationResponse,
   { success: false }
+>["failure"];
+export type SeedOpinionCreateFailure = Extract<
+  CreateConversationFailure,
+  { target: "seed_opinion" }
+>;
+type ProjectCreateFailureReason = Extract<
+  CreateConversationFailure,
+  { target: "project" }
 >["reason"];
 
 type BuildCreateConversationRequestResult =
@@ -45,14 +56,15 @@ type BuildCreateConversationRequestResult =
 
 function buildBaseCreateConversationRequest({
   conversationDraft,
+  postAsOrganizationSlug,
 }: {
   conversationDraft: ConversationDraft;
+  postAsOrganizationSlug: string | undefined;
 }) {
   return {
     conversationTitle: conversationDraft.title,
     conversationBody:
       conversationDraft.content === "" ? undefined : conversationDraft.content,
-    conversationBodyPlainText: conversationDraft.contentPlainText,
     projectSlug: conversationDraft.selectedProjectSlug,
     languageSettingsSource:
       conversationDraft.selectedProjectSlug !== undefined &&
@@ -60,9 +72,7 @@ function buildBaseCreateConversationRequest({
         ? "project_inherited"
         : "conversation_override",
     multilingualSetting: conversationDraft.multilingualSetting,
-    postAsOrganization: conversationDraft.postAs.postAsOrganization
-      ? conversationDraft.postAs.organizationName
-      : "",
+    postAsOrganization: postAsOrganizationSlug ?? "",
     isIndexed: !conversationDraft.isPrivate,
     participationMode: conversationDraft.participationMode,
     seedOpinionList: conversationDraft.seedOpinions,
@@ -73,12 +83,15 @@ function buildBaseCreateConversationRequest({
 function buildCreateConversationRequest({
   conversationDraft,
   surveyConfig,
+  postAsOrganizationSlug,
 }: {
   conversationDraft: ConversationDraft;
   surveyConfig: SurveyConfig | null;
+  postAsOrganizationSlug: string | undefined;
 }): BuildCreateConversationRequestResult {
   const baseCreateRequest = buildBaseCreateConversationRequest({
     conversationDraft,
+    postAsOrganizationSlug,
   });
 
   if (conversationDraft.conversationType === "ranking") {
@@ -119,6 +132,7 @@ export function usePublishConversationDraft() {
   const router = useRouter();
   const navigationStore = useNavigationStore();
   const newConversationDraftsStore = useNewPostDraftsStore();
+  const userStore = useUserStore();
   const { showNotifyMessage } = useNotify();
   const { t } = useComponentI18n<CreateConversationTranslations>(
     createConversationTranslations
@@ -134,12 +148,25 @@ export function usePublishConversationDraft() {
     invalidSurveyMessage,
     defaultErrorMessage,
     onInvalidSurvey,
+    onSeedOpinionFailure,
     beforeSuccessNavigation,
   }: PublishConversationDraftParams): Promise<boolean> {
     try {
+      const publicationIdentity =
+        await resolveDraftPublicationIdentityAtBoundary({
+          postAs: conversationDraft.postAs,
+          getProfile: () => userStore.profileData,
+          loadProfile: userStore.loadUserProfile,
+        });
+      if (publicationIdentity.status !== "resolved") {
+        showNotifyMessage(t("organizationUnavailable"));
+        return false;
+      }
+
       const createRequestResult = buildCreateConversationRequest({
         conversationDraft,
         surveyConfig,
+        postAsOrganizationSlug: publicationIdentity.organizationSlug,
       });
 
       if (!createRequestResult.success) {
@@ -159,15 +186,22 @@ export function usePublishConversationDraft() {
       }
 
       if (!response.data.success) {
-        switch (response.data.reason) {
-          case "plain_text_too_long":
-          case "html_too_long": {
+        const failure = response.data.failure;
+        switch (failure.target) {
+          case "seed_opinion": {
+            if (onSeedOpinionFailure !== undefined) {
+              onSeedOpinionFailure(failure);
+            } else {
+              showNotifyMessage(defaultErrorMessage);
+            }
+            break;
+          }
+          case "conversation_body": {
             showNotifyMessage(defaultErrorMessage);
             break;
           }
-          case "organization_not_available":
-          case "missing_conversation_create_capability": {
-            showProjectTargetFailure(response.data.reason);
+          case "project": {
+            showProjectTargetFailure(failure.reason);
             break;
           }
         }
@@ -202,7 +236,7 @@ export function usePublishConversationDraft() {
   }
 
   function showProjectTargetFailure(
-    reason: CreateConversationFailureReason
+    reason: ProjectCreateFailureReason
   ): void {
     if (reason === "organization_not_available") {
       showNotifyMessage(t("organizationUnavailable"));

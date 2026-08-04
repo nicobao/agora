@@ -7,6 +7,7 @@ import {
     conversationModerationTable,
     organizationTable,
     polisConversationConfigTable,
+    rankingConversationConfigTable,
     projectContentTable,
     projectOrganizationOwnershipTable,
     projectTable,
@@ -16,10 +17,15 @@ import { httpErrors } from "@fastify/sensible";
 import { toUnionUndefined } from "@/shared/shared.js";
 import type { GoogleCloudCredentials } from "@/shared-backend/googleCloudAuth.js";
 import {
+    buildSurveyAnalysisRefreshContext,
     getActiveSurveyConfigRecord,
     getSurveyConfigForConversation,
+    scheduleConversationAnalysisForSurveyChange,
     setSurveyConfigForConversation,
+    wakeScheduledConversationAnalysisForSurveyChange,
 } from "@/service/survey.js";
+import { shouldRecomputeAnalysisForSurveyConfigChange } from "@/shared-backend/surveyAnalysis.js";
+import type { Valkey } from "@/shared-backend/valkey.js";
 import type {
     GetConversationForEditResponse,
     UpdateConversationRequest,
@@ -36,7 +42,10 @@ import {
     getRestrictedPremiumFeatures,
 } from "@/service/premiumEntitlement.js";
 import { createConversationViewSnapshotsFromCurrentState } from "@/service/conversationViewSnapshot.js";
-import { queueConversationSettingsUpdatedEvent } from "@/service/realtimeEventOutbox.js";
+import {
+    queueConversationSettingsUpdatedEvent,
+    queueConversationSurveyUpdatedEvent,
+} from "@/service/realtimeEventOutbox.js";
 import {
     buildConversationLanguageDetectionCorpus,
     buildGoogleConversationLanguageDetectionCorpus,
@@ -285,6 +294,7 @@ interface UpdateConversationProps {
     db: PostgresDatabase;
     userId: string;
     googleCloudCredentials?: GoogleCloudCredentials;
+    valkey?: Valkey;
     data: Omit<UpdateConversationRequest, "conversationSlugId"> & {
         conversationSlugId: string;
     };
@@ -300,13 +310,13 @@ export async function updateConversation({
     db,
     userId,
     googleCloudCredentials,
+    valkey,
     data,
 }: UpdateConversationProps): Promise<UpdateConversationServiceResponse> {
     const {
         conversationSlugId,
         conversationTitle,
         conversationBody,
-        conversationBodyPlainText,
         isIndexed,
         participationMode,
         languageSettingsSource,
@@ -323,13 +333,13 @@ export async function updateConversation({
         try {
             const normalizationResult = normalizeUserRichTextInput({
                 html: sanitizedBody,
-                plainText: conversationBodyPlainText,
                 validationMode: "conversation",
-                logLabel:
-                    "[ConversationPlainText] Frontend/backend plain text mismatch on update",
             });
             if (!normalizationResult.success) {
-                return normalizationResult;
+                return {
+                    success: false,
+                    reason: normalizationResult.reason,
+                };
             }
             sanitizedBody = normalizationResult.content.html;
             bodyPlainText = normalizationResult.content.plainText;
@@ -354,6 +364,7 @@ export async function updateConversation({
                 organizationName: organizationTable.displayName,
                 currentContentId: conversationTable.currentContentId,
                 conversationType: conversationTable.conversationType,
+                rankingMode: rankingConversationConfigTable.rankingMode,
                 polisConfigId: conversationTable.polisConfigId,
                 isIndexed: conversationTable.isIndexed,
                 participationMode: conversationTable.participationMode,
@@ -407,6 +418,13 @@ export async function updateConversation({
                 eq(polisConversationConfigTable.id, conversationTable.polisConfigId),
             )
             .leftJoin(
+                rankingConversationConfigTable,
+                eq(
+                    rankingConversationConfigTable.id,
+                    conversationTable.rankingConfigId,
+                ),
+            )
+            .leftJoin(
                 conversationModerationTable,
                 and(
                     eq(
@@ -457,6 +475,12 @@ export async function updateConversation({
         }
 
         const conversationId = conversation.conversationId;
+        const surveyAnalysisRefreshContext = buildSurveyAnalysisRefreshContext({
+            conversationId,
+            slugId: data.conversationSlugId,
+            conversationType: conversation.conversationType,
+            rankingMode: conversation.rankingMode,
+        });
         const effectiveSurveyConfig =
             surveyConfig === undefined
                 ? ((await getSurveyConfigForConversation({
@@ -716,6 +740,7 @@ export async function updateConversation({
         }
 
         let surveySources: SurveyQuestionContentSource[] = [];
+        let analysisRefreshScheduled = false;
         if (surveyConfig !== undefined) {
             const sourceLanguageMetadata =
                 await getBlockSourceLanguageMetadata();
@@ -730,6 +755,18 @@ export async function updateConversation({
                 sourceLanguageMetadata,
             });
             surveySources = surveyUpdateEffect.currentQuestionSources;
+            if (shouldRecomputeAnalysisForSurveyConfigChange(surveyUpdateEffect)) {
+                analysisRefreshScheduled =
+                    await scheduleConversationAnalysisForSurveyChange({
+                        db: tx,
+                        conversation: surveyAnalysisRefreshContext,
+                    });
+            }
+            await queueConversationSurveyUpdatedEvent({
+                db: tx,
+                conversationSlugId: data.conversationSlugId,
+                configChanged: true,
+            });
         }
 
         let refreshedSourceLanguageMetadata: ContentLanguageMetadata | undefined;
@@ -889,19 +926,28 @@ export async function updateConversation({
                 preferredOpinionGroupCount: updatedPreferredOpinionGroupCount,
                 isClosed: conversation.isClosed,
             },
+            analysisRefreshScheduled,
+            surveyAnalysisRefreshContext,
         } as const;
     });
 
-    if (result.success && result.didUpdateConversationSettings) {
+    if (!result.success) {
+        return result;
+    }
+
+    if (result.analysisRefreshScheduled) {
+        await wakeScheduledConversationAnalysisForSurveyChange({
+            conversation: result.surveyAnalysisRefreshContext,
+            valkey,
+        });
+    }
+
+    if (result.didUpdateConversationSettings) {
         await queueConversationSettingsUpdatedEvent({
             db,
             conversationSlugId: result.conversationSlugId,
             settings: result.conversationSettings,
         });
-    }
-
-    if (!result.success) {
-        return result;
     }
 
     return {

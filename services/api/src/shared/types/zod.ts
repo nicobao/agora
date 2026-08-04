@@ -10,10 +10,12 @@ import {
     MAX_LENGTH_NAME_CREATOR,
     MAX_LENGTH_BODY,
     MAX_LENGTH_BODY_HTML,
+    MAX_BYTES_RICH_TEXT_HTML,
     LEGACY_MAX_LENGTH_CONVERSATION_BODY_HTML_OUTPUT,
     MAX_LENGTH_USER_REPORT_EXPLANATION,
-    MAX_LENGTH_OPINION_HTML_OUTPUT,
-    normalizeRichTextEmptyLines,
+    countUtf8Bytes,
+    richTextSizeValidationFailureReasons,
+    richTextValidationFailureReasons,
 } from "../shared.js";
 import { isValidPolisUrl } from "../utils/polis.js";
 import {
@@ -122,7 +124,8 @@ export const zodConversationLanguageSettingOutput = z
     .strict();
 export const zodContentLanguageMetadataOutput = z
     .object({
-        detectedDisplayLanguageCode: ZodSupportedDisplayLanguageCodes.nullable(),
+        detectedDisplayLanguageCode:
+            ZodSupportedDisplayLanguageCodes.nullable(),
         detectedSourceLanguageCode: ZodDetectedSourceLanguageCode.nullable(),
         detectedRawLanguageCode: z.string().nullable(),
         detectionConfidence: z.number().nullable(),
@@ -221,10 +224,18 @@ export const zodExportFileType = z.enum([
     "survey_full_aggregates",
 ]);
 export const zodExportFileAudience = z.enum(["redacted", "owner", "requester"]);
-const zodHttpUrl = z.url().refine((value) => {
-    const protocol = new URL(value).protocol;
-    return protocol === "http:" || protocol === "https:";
-}, "URL must use http or https");
+export const zodHttpsUrl = z.url().refine((value) => {
+    try {
+        const url = new URL(value);
+        return (
+            url.protocol === "https:" &&
+            url.username === "" &&
+            url.password === ""
+        );
+    } catch {
+        return false;
+    }
+}, "URL must use HTTPS without embedded credentials");
 export const zodExportFileInfo = z
     .object({
         fileType: zodExportFileType,
@@ -248,7 +259,7 @@ export const zodOrganization = z
         name: z.string(),
         slug: zodOrganizationSlug,
         imageUrl: z.string().optional(),
-        websiteUrl: zodHttpUrl.optional(),
+        websiteUrl: zodHttpsUrl.optional(),
         description: z.string(),
     })
     .strict();
@@ -280,27 +291,15 @@ export const zodModerationExplanation = z.string().max(MAX_LENGTH_BODY);
 export const zodCode = z.coerce.number().min(0).max(999999);
 export const zodDigit = z.coerce.number().int().nonnegative().lte(9);
 export const zodUserId = z.uuid().min(1);
-export const zodDevice = z
-    .object({
-        didWrite: zodDidKey,
-        userAgent: z.string(),
-    })
-    .strict();
-export const zodDevices = z.array(zodDevice); // list of didWrite of all the devices belonging to a user
 export const zodConversationTitle = z.string().max(MAX_LENGTH_TITLE).min(1);
-export const zodRichTextValidationFailureReason = z.enum([
-    "plain_text_too_long",
-    "html_too_long",
-]);
+export const zodRichTextValidationFailureReason = z.enum(
+    richTextValidationFailureReasons,
+);
+export const zodRichTextSizeValidationFailureReason = z.enum(
+    richTextSizeValidationFailureReasons,
+);
 
-function normalizeRichTextInput(val: unknown): unknown {
-    return typeof val === "string" ? normalizeRichTextEmptyLines(val) : val;
-}
-
-export const zodConversationBodyInput = z
-    .preprocess(normalizeRichTextInput, z.string())
-    .optional();
-export const zodConversationBodyPlainTextInput = z.string();
+export const zodConversationBodyInput = z.string().optional();
 
 // For database/API output - validates HTML string length only (after linkification may add extra chars)
 export const zodConversationBodyOutput = z
@@ -309,7 +308,10 @@ export const zodConversationBodyOutput = z
         message: `Raw HTML content exceeds maximum length of ${String(LEGACY_MAX_LENGTH_CONVERSATION_BODY_HTML_OUTPUT)} characters`,
     })
     .optional();
-export const zodLocalizedContentDisplayMode = z.enum(["original", "translated"]);
+export const zodLocalizedContentDisplayMode = z.enum([
+    "original",
+    "translated",
+]);
 export const zodLocalizedContentTranslationStatus = z.enum([
     "not_requested",
     "pending",
@@ -329,6 +331,7 @@ export const zodContentTranslationSubject = z.discriminatedUnion("kind", [
             kind: z.literal("opinion"),
             conversationSlugId: zodSlugId,
             opinionSlugId: zodSlugId,
+            sourceVersion: z.uuid(),
         })
         .strict(),
     z
@@ -342,6 +345,7 @@ export const zodContentTranslationSubject = z.discriminatedUnion("kind", [
         .object({
             kind: z.literal("project"),
             projectSlug: zodProjectSlug,
+            sourceVersion: z.uuid(),
         })
         .strict(),
     z
@@ -349,26 +353,30 @@ export const zodContentTranslationSubject = z.discriminatedUnion("kind", [
             kind: z.literal("ranking_item"),
             conversationSlugId: zodSlugId,
             itemSlugId: zodSlugId,
+            sourceVersion: z.uuid(),
         })
         .strict(),
 ]);
-export const zodContentTranslationSourceLanguage = z.discriminatedUnion("kind", [
-    z
-        .object({
-            kind: z.literal("recognized"),
-            languageCode: ZodSupportedSpokenLanguageCodes,
-            label: z.string().min(1),
-        })
-        .strict(),
-    z
-        .object({
-            kind: z.literal("raw"),
-            rawLanguageCode: z.string().min(1),
-            label: z.string().min(1).optional(),
-        })
-        .strict(),
-    z.object({ kind: z.literal("unknown") }).strict(),
-]);
+export const zodContentTranslationSourceLanguage = z.discriminatedUnion(
+    "kind",
+    [
+        z
+            .object({
+                kind: z.literal("recognized"),
+                languageCode: ZodSupportedSpokenLanguageCodes,
+                label: z.string().min(1),
+            })
+            .strict(),
+        z
+            .object({
+                kind: z.literal("raw"),
+                rawLanguageCode: z.string().min(1),
+                label: z.string().min(1).optional(),
+            })
+            .strict(),
+        z.object({ kind: z.literal("unknown") }).strict(),
+    ],
+);
 const zodLocalizedContentTranslationMetadata = z
     .object({
         targetLanguageCode: ZodSupportedDisplayLanguageCodes,
@@ -401,15 +409,12 @@ const zodDisplayedContentUnavailable = z
 export function createZodLocalizedContent<
     TContent extends z.ZodType,
     TTranslatedContent extends z.ZodType,
->(
-    contentSchema: TContent,
-    translatedContentSchema: TTranslatedContent,
-) {
+>(contentSchema: TContent, translatedContentSchema: TTranslatedContent) {
     return z.union([
         z
             .object({
                 kind: z.literal("original_only"),
-                sourceVersion: z.string().min(1),
+                sourceVersion: z.uuid(),
                 initialMode: z.literal("original"),
                 variants: z
                     .object({
@@ -421,7 +426,7 @@ export function createZodLocalizedContent<
         z
             .object({
                 kind: z.literal("translatable"),
-                sourceVersion: z.string().min(1),
+                sourceVersion: z.uuid(),
                 initialMode: z.literal("original"),
                 translation: zodLocalizedContentTranslationMetadata,
                 variants: z
@@ -435,7 +440,7 @@ export function createZodLocalizedContent<
         z
             .object({
                 kind: z.literal("translatable"),
-                sourceVersion: z.string().min(1),
+                sourceVersion: z.uuid(),
                 initialMode: z.literal("translated"),
                 translation: zodCompletedLocalizedContentTranslationMetadata,
                 variants: z
@@ -452,10 +457,7 @@ export function createZodLocalizedContent<
 export function createZodDisplayedContent<
     TContent extends z.ZodType,
     TTranslatedContent extends z.ZodType,
->(
-    contentSchema: TContent,
-    translatedContentSchema: TTranslatedContent,
-) {
+>(contentSchema: TContent, translatedContentSchema: TTranslatedContent) {
     return z.union([
         z
             .object({
@@ -463,7 +465,8 @@ export function createZodDisplayedContent<
                 status: z.literal("available"),
                 mode: z.literal("original"),
                 content: contentSchema,
-                translationControl: zodDisplayedContentTranslationControl.nullable(),
+                translationControl:
+                    zodDisplayedContentTranslationControl.nullable(),
             })
             .strict(),
         z
@@ -472,7 +475,8 @@ export function createZodDisplayedContent<
                 status: z.literal("available"),
                 mode: z.literal("translated"),
                 content: translatedContentSchema,
-                translationControl: zodDisplayedContentTranslationControl.nullable(),
+                translationControl:
+                    zodDisplayedContentTranslationControl.nullable(),
             })
             .strict(),
         zodDisplayedContentUnavailable,
@@ -831,9 +835,36 @@ const zodSurveyQuestionFreeTextRichTextConstraints = z
     .object({
         type: z.literal("free_text"),
         inputMode: z.literal("rich_text").optional().default("rich_text"),
-        minPlainTextLength: z.number().int().nonnegative().optional(),
+        minPlainTextLength: z
+            .number()
+            .int()
+            .nonnegative()
+            .optional(),
         maxPlainTextLength: z.number().int().positive(),
         maxHtmlLength: z.number().int().positive(),
+    })
+    .strict();
+
+const zodSurveyQuestionFreeTextRichTextConstraintsInput = z
+    .object({
+        type: z.literal("free_text"),
+        inputMode: z.literal("rich_text").optional().default("rich_text"),
+        minPlainTextLength: z
+            .number()
+            .int()
+            .nonnegative()
+            .max(MAX_LENGTH_BODY_HTML)
+            .optional(),
+        maxPlainTextLength: z
+            .number()
+            .int()
+            .positive()
+            .max(MAX_LENGTH_BODY_HTML),
+        maxHtmlLength: z
+            .number()
+            .int()
+            .positive()
+            .max(MAX_LENGTH_BODY_HTML),
     })
     .strict();
 
@@ -908,7 +939,10 @@ const zodSurveyQuestionBase = z
 const zodSurveyChoiceQuestionBase = zodSurveyQuestionBase
     .extend({
         choiceDisplay: zodSurveyChoiceDisplay,
-        isPublicAggregateSuppressionEnabled: z.boolean().optional().default(false),
+        isPublicAggregateSuppressionEnabled: z
+            .boolean()
+            .optional()
+            .default(false),
         options: z.array(zodSurveyQuestionOption).min(2),
     })
     .strict();
@@ -925,6 +959,16 @@ const zodSurveyFreeTextQuestionConfig = zodSurveyQuestionBase
         questionType: z.literal("free_text"),
         constraints: z.union([
             zodSurveyQuestionFreeTextRichTextConstraints,
+            zodSurveyQuestionFreeTextIntegerConstraints,
+        ]),
+    })
+    .strict();
+
+const zodSurveyFreeTextQuestionConfigInput = zodSurveyQuestionBase
+    .extend({
+        questionType: z.literal("free_text"),
+        constraints: z.union([
+            zodSurveyQuestionFreeTextRichTextConstraintsInput,
             zodSurveyQuestionFreeTextIntegerConstraints,
         ]),
     })
@@ -1057,6 +1101,21 @@ export const zodSurveyConfig = z
         }
     });
 
+const zodSurveyQuestionConfigInput = z
+    .discriminatedUnion("questionType", [
+        zodSurveyChoiceQuestionConfig,
+        zodSurveyFreeTextQuestionConfigInput,
+    ])
+    .refine((value) => zodSurveyQuestionConfig.safeParse(value).success);
+
+export const zodSurveyConfigInput = z
+    .object({
+        isOptional: z.boolean().optional().default(false),
+        questions: z.array(zodSurveyQuestionConfigInput),
+    })
+    .strict()
+    .refine((value) => zodSurveyConfig.safeParse(value).success);
+
 export const zodSurveyGateStatus = z.enum([
     "no_survey",
     "not_started",
@@ -1124,7 +1183,7 @@ const zodSurveyFreeTextAnswerDraft = z
     .object({
         questionType: z.literal("free_text"),
         textValueHtml: z.string().max(MAX_LENGTH_BODY_HTML),
-        textValuePlainText: z.string().max(MAX_LENGTH_BODY),
+        textValuePlainText: z.string(),
     })
     .strict();
 
@@ -1137,7 +1196,19 @@ export const zodSurveyAnswerDraft = z.discriminatedUnion("questionType", [
     zodSurveyFreeTextAnswerDraft,
 ]);
 
-export const zodSurveyAnswerSubmission = zodSurveyAnswerDraft;
+export const zodSurveyAnswerSubmission = z.discriminatedUnion("questionType", [
+    zodSurveyChoiceAnswerDraftBase
+        .extend({
+            questionType: z.literal("choice"),
+        })
+        .strict(),
+    z
+        .object({
+            questionType: z.literal("free_text"),
+            textValueHtml: z.string().max(MAX_LENGTH_BODY_HTML),
+        })
+        .strict(),
+]);
 
 const zodSurveyQuestionFormItemFields = {
     currentAnswer: zodSurveyAnswerDraft.optional(),
@@ -1188,7 +1259,12 @@ export const zodConversationProjectContext = z
     .object({
         projectSlug: zodProjectSlug,
         originalProjectTitle: z.string().trim().min(1).max(MAX_LENGTH_TITLE),
-        translatedProjectTitle: z.string().trim().min(1).max(MAX_LENGTH_TITLE).optional(),
+        translatedProjectTitle: z
+            .string()
+            .trim()
+            .min(1)
+            .max(MAX_LENGTH_TITLE)
+            .optional(),
         conversationSlugId: zodSlugId,
     })
     .strict();
@@ -1226,19 +1302,23 @@ const zodConversationMetadataBase = z
         projectContext: zodConversationProjectContext.optional(),
     })
     .strict();
-export const zodConversationMetadata = z.discriminatedUnion("conversationType", [
-    zodConversationMetadataBase
-        .extend({
-            conversationType: z.literal("polis"),
-        })
-        .strict(),
-    zodConversationMetadataBase
-        .extend({
-            conversationType: z.literal("ranking"),
-            rankingMode: zodRankingMode,
-        })
-        .strict(),
-]);
+export const zodConversationMetadata = z.discriminatedUnion(
+    "conversationType",
+    [
+        zodConversationMetadataBase
+            .extend({
+                conversationType: z.literal("polis"),
+            })
+            .strict(),
+        zodConversationMetadataBase
+            .extend({
+                conversationType: z.literal("ranking"),
+                rankingMode: zodRankingMode,
+                rankingStatsSnapshotId: z.number().int().positive().optional(),
+            })
+            .strict(),
+    ],
+);
 const zodConversationMetadataWithIdBase = z
     .object({
         conversationId: z.number().int().nonnegative(),
@@ -1294,6 +1374,7 @@ export const zodConversationMetadataWithId = z.discriminatedUnion(
             .extend({
                 conversationType: z.literal("ranking"),
                 rankingMode: zodRankingMode,
+                rankingStatsSnapshotId: z.number().int().positive().optional(),
             })
             .strict(),
     ],
@@ -1321,15 +1402,13 @@ export const zodAnalysisViewOptionReason = z.enum([
     "recommended_default_unavailable",
 ]);
 
-export const zodOpinionContentInput = z
-    .preprocess(normalizeRichTextInput, z.string().min(1));
-
-// For database/API output - validates HTML string length only (after linkification may add extra chars)
+export const zodOpinionContentInput = z.string();
+// Existing linked content and new editor HTML share the same technical byte ceiling.
 export const zodOpinionContentOutput = z
     .string()
     .min(1)
-    .max(MAX_LENGTH_OPINION_HTML_OUTPUT, {
-        message: `Raw HTML content exceeds maximum length of ${String(MAX_LENGTH_OPINION_HTML_OUTPUT)} characters`,
+    .refine((content) => countUtf8Bytes(content) <= MAX_BYTES_RICH_TEXT_HTML, {
+        message: `Raw HTML content exceeds maximum size of ${String(MAX_BYTES_RICH_TEXT_HTML)} bytes`,
     });
 export const zodOpinionContentVariant = z
     .object({
@@ -1379,12 +1458,36 @@ export const zodOpinionItem = z
 export const zodDisplayedOpinionItem = zodOpinionItem.extend({
     displayContent: zodOpinionDisplayedContent,
 });
-export const zodAnalysisOpinionItem = zodOpinionItem.extend({
-    clustersStats: z.array(zodClusterStats),
-    groupAwareConsensusAgree: z.number().nonnegative(),
-    groupAwareConsensusDisagree: z.number().nonnegative(),
-    divisiveScore: z.number().nonnegative(),
-});
+const zodAnalysisOpinionContent = z.discriminatedUnion("status", [
+    z
+        .object({
+            status: z.literal("visible"),
+            html: zodOpinionContentOutput,
+            sourceLanguageCode: z.string().nullable(),
+            displayContent: zodOpinionDisplayedContent,
+            moderation: zodOpinionModerationProperties,
+        })
+        .strict(),
+    z
+        .object({
+            status: z.literal("redacted"),
+            reason: z.enum(["statement_deleted", "hidden_by_moderation"]),
+        })
+        .strict(),
+]);
+export const zodAnalysisOpinionItem = zodOpinionItem
+    .omit({
+        opinion: true,
+        sourceLanguageCode: true,
+        moderation: true,
+    })
+    .extend({
+        content: zodAnalysisOpinionContent,
+        clustersStats: z.array(zodClusterStats),
+        groupAwareConsensusAgree: z.number().nonnegative(),
+        groupAwareConsensusDisagree: z.number().nonnegative(),
+        divisiveScore: z.number().nonnegative(),
+    });
 export const zodClusterMetadata = z
     .object({
         id: z.number().int().nonnegative(),
@@ -1443,9 +1546,10 @@ export const zodExtendedConversationData = z
         interaction: zodUserInteraction,
     })
     .strict();
-export const zodExtendedConversationDisplayData = zodExtendedConversationData.omit({
-    payload: true,
-});
+export const zodExtendedConversationDisplayData =
+    zodExtendedConversationData.omit({
+        payload: true,
+    });
 export const zodExtendedConversationDataWithId = z
     .object({
         metadata: zodConversationMetadataWithId,
@@ -1952,8 +2056,6 @@ export const zodPolisUrl = z
             message: "Please use valid polis url",
         },
     );
-export type Device = z.infer<typeof zodDevice>;
-export type Devices = z.infer<typeof zodDevices>;
 export type ExtendedConversation = z.infer<typeof zodExtendedConversationData>;
 export type ExtendedConversationDisplayData = z.infer<
     typeof zodExtendedConversationDisplayData
@@ -1996,8 +2098,12 @@ export type LocalizedConversationContent = z.infer<
     typeof zodLocalizedConversationContent
 >;
 export type ProjectContentVariant = z.infer<typeof zodProjectContentVariant>;
-export type LocalizedProjectContent = z.infer<typeof zodLocalizedProjectContent>;
-export type ProjectDisplayedContent = z.infer<typeof zodProjectDisplayedContent>;
+export type LocalizedProjectContent = z.infer<
+    typeof zodLocalizedProjectContent
+>;
+export type ProjectDisplayedContent = z.infer<
+    typeof zodProjectDisplayedContent
+>;
 export type TitleBodyContentVariant = z.infer<
     typeof zodTitleBodyContentVariant
 >;
@@ -2125,7 +2231,9 @@ export type ConversationLanguageSettingOutput = z.infer<
 export type ContentLanguageMetadataOutput = z.infer<
     typeof zodContentLanguageMetadataOutput
 >;
-export type ProjectLanguageSettings = z.infer<typeof zodProjectLanguageSettings>;
+export type ProjectLanguageSettings = z.infer<
+    typeof zodProjectLanguageSettings
+>;
 export type ConversationMultilingualSetting = z.infer<
     typeof zodConversationMultilingualSetting
 >;
@@ -2180,20 +2288,26 @@ export type GrantablePremiumFeature = z.infer<
 >;
 
 // MaxDiff (Best-Worst Scaling) types
-const zodMaxdiffEntityId = z.string().min(1).refine((id) => id.trim() === id, {
-    message: "MaxDiff entity IDs must not have leading or trailing whitespace",
-});
+const zodMaxdiffEntityId = z
+    .string()
+    .min(1)
+    .refine((id) => id.trim() === id, {
+        message:
+            "MaxDiff entity IDs must not have leading or trailing whitespace",
+    });
 
-const zodMaxdiffCandidateSet = z.array(zodMaxdiffEntityId).min(2).superRefine(
-    (candidateSet, ctx) => {
+const zodMaxdiffCandidateSet = z
+    .array(zodMaxdiffEntityId)
+    .min(2)
+    .superRefine((candidateSet, ctx) => {
         if (new Set(candidateSet).size !== candidateSet.length) {
             ctx.addIssue({
                 code: "custom",
-                message: "MaxDiff candidate set must not contain duplicate items",
+                message:
+                    "MaxDiff candidate set must not contain duplicate items",
             });
         }
-    },
-);
+    });
 
 export const zodMaxdiffComparison = z
     .object({

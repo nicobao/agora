@@ -14,6 +14,28 @@
         "auth_attempt_email",
         "auth_attempt_phone",
         "otp_email_destination_state",
-        "otp_phone_destination_state"
+        "otp_phone_destination_state",
+        "realtime_event_outbox"
+    ],
+    "zupass-auth": [
+        "user",
+        "device",
+        "email",
+        "phone",
+        "zk_passport",
+        "event_ticket",
+        "user_display_language",
+        "user_spoken_languages"
+    ],
+    "content-translation": [
+        "user",
+        "conversation",
+        "opinion",
+        "opinion_content",
+        "opinion_content_translation",
+        "content_translation_work",
+        "opinion_moderation",
+        "analysis_snapshot_opinion",
+        "conversation_view_snapshot"
     ]
 }

@@ -1,4 +1,5 @@
 import { drizzle } from "drizzle-orm/postgres-js";
+import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { withReplicas } from "drizzle-orm/pg-core";
 import { type SharedConfigSchema } from "./config.js";
@@ -10,6 +11,22 @@ import type pino from "pino";
 import { DrizzleFastifyLogger } from "./logger.js";
 
 const POSTGRES_STARTUP_RETRY_MS = 5_000;
+
+interface PrimaryReplicaDatabase extends PostgresJsDatabase {
+    $primary: PostgresJsDatabase;
+}
+
+export function hasPrimaryDatabase(
+    database: PostgresJsDatabase,
+): database is PrimaryReplicaDatabase {
+    return "$primary" in database;
+}
+
+export function getPrimaryDatabase(
+    database: PostgresJsDatabase,
+): PostgresJsDatabase {
+    return hasPrimaryDatabase(database) ? database.$primary : database;
+}
 
 function sleep({ ms }: { ms: number }): Promise<void> {
     return new Promise((resolve) => {
@@ -145,7 +162,10 @@ export async function createDb(
         useReadReplica: false,
     });
     const primaryDb = drizzle(primaryClient, {
-        logger: new DrizzleFastifyLogger(log),
+        logger: new DrizzleFastifyLogger({
+            fastifyLogger: log,
+            includeParams: config.NODE_ENV === "development",
+        }),
     });
 
     // Check if read replica config exists
@@ -163,7 +183,10 @@ export async function createDb(
             useReadReplica: true,
         });
         const readDb = drizzle(readClient, {
-            logger: new DrizzleFastifyLogger(log),
+            logger: new DrizzleFastifyLogger({
+                fastifyLogger: log,
+                includeParams: config.NODE_ENV === "development",
+            }),
         });
 
         log.info(

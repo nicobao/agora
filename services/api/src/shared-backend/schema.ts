@@ -16,6 +16,7 @@ import {
     check,
     smallint,
     real,
+    bigint,
     serial,
     foreignKey,
 } from "drizzle-orm/pg-core";
@@ -30,12 +31,10 @@ import { projectOrganizationAttributionRoleValues } from "@/shared/types/project
 // WARNING: when you modify these limits, change this in shared.ts as well
 const MAX_LENGTH_TITLE = 140;
 const MAX_LENGTH_BODY = 1000;
+const MAX_BYTES_RICH_TEXT_HTML = 16_384;
 // const MAX_LENGTH_OPINION = 280;
-const MAX_LENGTH_OPINION_HTML = 3000; // is lower now, kept this value For retro-compatibility
 const MAX_LENGTH_SURVEY_QUESTION = 500;
 const MAX_LENGTH_SURVEY_OPTION = 200;
-const MAX_LENGTH_RANKING_ITEM_TITLE = 200;
-const MAX_LENGTH_RANKING_ITEM_BODY = 3000;
 const MAX_LENGTH_NAME_CREATOR = 65;
 const MAX_LENGTH_DESCRIPTION_CREATOR = 280;
 const MAX_LENGTH_USERNAME = 20;
@@ -843,6 +842,15 @@ export const conversationViewSnapshotCheckpointReasonEnum = pgEnum(
     ],
 );
 
+export const rankingStatsCheckpointReasonEnum = pgEnum(
+    "ranking_stats_checkpoint_reason_enum",
+    [
+        "major_participation_milestone",
+        "major_vote_milestone",
+        "conversation_closed",
+    ],
+);
+
 export const conversationViewSnapshotReasonEnum = pgEnum(
     "conversation_view_snapshot_reason_enum",
     [
@@ -860,7 +868,7 @@ export const conversationViewSnapshotReasonEnum = pgEnum(
 // The association between users and devices/emails can change over time.
 // A user must have at least 1 validated primary email and 1 device associated with it.
 // The "at least one" conditon is not enforced directly in the SQL model yet. It is done in the application code.
-/** @service scoring-worker, shared-analysis-worker, import-worker */
+/** @service scoring-worker, shared-analysis-worker, import-worker, content-translation-worker */
 export const userTable = pgTable(
     "user",
     {
@@ -1787,27 +1795,41 @@ export const emailTable = pgTable(
     ],
 );
 
-export const deviceTable = pgTable("device", {
-    didWrite: varchar("did_write", { length: 1000 }).primaryKey(), // TODO: make sure of length
-    userId: uuid("user_id")
-        .references(() => userTable.id)
-        .notNull(),
-    userAgent: text("user_agent").notNull(), // user-agent length is not fixed
-    // TODO: isTrusted: boolean("is_trusted").notNull(), // if set to true by user then, device should stay logged-in indefinitely until log out action
-    sessionExpiry: timestamp("session_expiry").notNull(), // on register, a new login session is always started, hence the notNull. This column is updated to now + 15 minutes at each request when isTrusted == false. Otherwise, expiry will be now + 1000 years - meaning no expiry.
-    createdAt: timestamp("created_at", {
-        mode: "date",
-        precision: 0,
-    })
-        .defaultNow()
-        .notNull(),
-    updatedAt: timestamp("updated_at", {
-        mode: "date",
-        precision: 0,
-    })
-        .defaultNow()
-        .notNull(),
-});
+export const deviceTable = pgTable(
+    "device",
+    {
+        didWrite: varchar("did_write", { length: 1000 }).primaryKey(), // TODO: make sure of length
+        userId: uuid("user_id")
+            .references(() => userTable.id)
+            .notNull(),
+        userAgent: text("user_agent").notNull(), // Retained for legacy rows; never expose it through session APIs.
+        sessionStartedAt: timestamp("session_started_at", {
+            mode: "date",
+            precision: 0,
+        })
+            .defaultNow()
+            .notNull(),
+        sessionExpiry: timestamp("session_expiry").notNull(),
+        createdAt: timestamp("created_at", {
+            mode: "date",
+            precision: 0,
+        })
+            .defaultNow()
+            .notNull(),
+        updatedAt: timestamp("updated_at", {
+            mode: "date",
+            precision: 0,
+        })
+            .defaultNow()
+            .notNull(),
+    },
+    (table) => [
+        index("device_user_session_expiry_idx").on(
+            table.userId,
+            table.sessionExpiry,
+        ),
+    ],
+);
 
 // !WARNING: this contains a tuple that cannot easily be mapped to enum AuthenticateType. Change both manually.
 // TODO: use zod or something to maintain one set of type only
@@ -1840,6 +1862,7 @@ export const authAttemptPhoneTable = pgTable(
         guessAttemptAmount: integer("guess_attempt_amount")
             .default(0)
             .notNull(),
+        isSynthetic: boolean("is_synthetic").default(false).notNull(),
         lastOtpSentAt: timestamp("last_otp_sent_at").notNull(),
         createdAt: timestamp("created_at", {
             mode: "date",
@@ -1907,6 +1930,9 @@ export const otpPhoneDestinationStateTable = pgTable(
         )
             .notNull()
             .default(0),
+        wrongGuessAttemptAmount: integer("wrong_guess_attempt_amount")
+            .notNull()
+            .default(0),
         backoffUntil: timestamp("backoff_until"),
         createdAt: timestamp("created_at", {
             mode: "date",
@@ -1921,7 +1947,13 @@ export const otpPhoneDestinationStateTable = pgTable(
             .defaultNow()
             .notNull(),
     },
-    (table) => [index("otp_phone_destination_updated_idx").on(table.updatedAt)],
+    (table) => [
+        check(
+            "otp_phone_wrong_guess_attempt_amount_nonnegative_check",
+            sql`${table.wrongGuessAttemptAmount} >= 0`,
+        ),
+        index("otp_phone_destination_updated_idx").on(table.updatedAt),
+    ],
 );
 
 // Tracks OTP send/backoff state per canonical email destination across devices/challenges.
@@ -1933,6 +1965,9 @@ export const otpEmailDestinationStateTable = pgTable(
         consecutiveFailedVerifyAttempts: integer(
             "consecutive_failed_verify_attempts",
         )
+            .notNull()
+            .default(0),
+        wrongGuessAttemptAmount: integer("wrong_guess_attempt_amount")
             .notNull()
             .default(0),
         backoffUntil: timestamp("backoff_until"),
@@ -1953,6 +1988,10 @@ export const otpEmailDestinationStateTable = pgTable(
         check(
             "otp_email_destination_canonical_check",
             sql`${table.email} = lower(btrim(${table.email}))`,
+        ),
+        check(
+            "otp_email_wrong_guess_attempt_amount_nonnegative_check",
+            sql`${table.wrongGuessAttemptAmount} >= 0`,
         ),
         index("otp_email_destination_updated_idx").on(table.updatedAt),
     ],
@@ -2032,6 +2071,22 @@ export const rankingConversationConfigTable = pgTable(
             .references((): AnyPgColumn => rankingScoreTable.id)
             .unique(),
         externalSourceConfig: jsonb("external_source_config"),
+        itemCount: integer("item_count").notNull().default(0),
+        totalItemCount: integer("total_item_count").notNull().default(0),
+        voteCount: integer("vote_count").notNull().default(0),
+        totalVoteCount: integer("total_vote_count").notNull().default(0),
+        participantCount: integer("participant_count").notNull().default(0),
+        totalParticipantCount: integer("total_participant_count")
+            .notNull()
+            .default(0),
+        scoringInputRevision: bigint("scoring_input_revision", { mode: "number" })
+            .notNull()
+            .default(0),
+        processedScoringInputRevision: bigint("processed_scoring_input_revision", {
+            mode: "number",
+        })
+            .notNull()
+            .default(-1),
         createdAt: timestamp("created_at", {
             mode: "date",
             precision: 0,
@@ -2045,6 +2100,12 @@ export const rankingConversationConfigTable = pgTable(
             .defaultNow()
             .notNull(),
     },
+    (table) => [
+        check(
+            "ranking_conversation_config_counts_check",
+            sql`${table.itemCount} >= 0 AND ${table.itemCount} <= ${table.totalItemCount} AND ${table.voteCount} >= 0 AND ${table.voteCount} <= ${table.totalVoteCount} AND ${table.participantCount} >= 0 AND ${table.participantCount} <= ${table.totalParticipantCount} AND ${table.scoringInputRevision} >= 0 AND ${table.processedScoringInputRevision} >= -1 AND ${table.processedScoringInputRevision} <= ${table.scoringInputRevision}`,
+        ),
+    ],
 );
 
 /** @service scoring-worker, api, shared-analysis-worker, import-worker, content-translation-worker */
@@ -2204,10 +2265,8 @@ export const rankingItemContentTable = pgTable(
         conversationContentId: integer("conversation_content_id")
             .notNull()
             .references(() => conversationContentTable.id),
-        title: varchar("title", {
-            length: MAX_LENGTH_RANKING_ITEM_TITLE,
-        }).notNull(),
-        body: varchar("body", { length: MAX_LENGTH_RANKING_ITEM_BODY }),
+        title: text("title").notNull(),
+        body: text("body"),
         bodyPlainText: text("body_plain_text"),
         sourceLanguageCode: spokenLanguageCodeEnum("source_language_code"),
         sourceRawLanguageCode: varchar("source_raw_language_code", {
@@ -2274,6 +2333,10 @@ export const rankingItemTable = pgTable(
             .notNull(),
     },
     (table) => [
+        unique("ranking_item_id_conversation_unique").on(
+            table.id,
+            table.conversationId,
+        ),
         index("ranking_item_conversation_active_idx").on(
             table.conversationId,
             table.currentContentId,
@@ -2293,7 +2356,7 @@ export const rankingItemTable = pgTable(
     ],
 );
 
-/** @service api */
+/** @service api, scoring-worker */
 export const rankingItemExternalSourceTable = pgTable(
     "ranking_item_external_source",
     {
@@ -2956,7 +3019,7 @@ export const opinionContentTable = pgTable(
         conversationContentId: integer("conversation_content_id")
             .references(() => conversationContentTable.id)
             .notNull(), // used to cascade delete all opinionContent when deleting a conversation(content)
-        content: varchar("content", { length: MAX_LENGTH_OPINION_HTML }).notNull(),
+        content: text("content").notNull(),
         contentPlainText: text("content_plain_text"),
         sourceLanguageCode: spokenLanguageCodeEnum("source_language_code"),
         sourceRawLanguageCode: varchar("source_raw_language_code", { length: 35 }),
@@ -2972,6 +3035,10 @@ export const opinionContentTable = pgTable(
             .notNull(),
     },
     (table) => [
+        check(
+            "opinion_content_content_byte_length_check",
+            sql`octet_length(${table.content}) <= ${sql.raw(String(MAX_BYTES_RICH_TEXT_HTML))}`,
+        ),
         check(
             "opinion_content_source_metadata_check",
             sql`((${table.sourceLanguageProvider} IS NULL AND ${table.sourceRawLanguageCode} IS NULL) OR (${table.sourceLanguageProvider} IS NOT NULL AND ${table.sourceRawLanguageCode} IS NOT NULL))`,
@@ -3449,8 +3516,7 @@ export const conversationModerationTable = pgTable(
     ],
 );
 
-/** @service shared-analysis-worker */
-/** @service import-worker */
+/** @service shared-analysis-worker, import-worker, content-translation-worker */
 export const opinionModerationTable = pgTable(
     "opinion_moderation",
     {
@@ -3898,7 +3964,7 @@ export const analysisSnapshotResultTable = pgTable(
     ],
 );
 
-/** @service api, shared-analysis-worker */
+/** @service api, shared-analysis-worker, content-translation-worker */
 export const analysisSnapshotOpinionTable = pgTable(
     "analysis_snapshot_opinion",
     {
@@ -4481,7 +4547,7 @@ export const opinionGroupCandidateAssessmentTable = pgTable(
     },
 );
 
-/** @service api, shared-analysis-worker, import-worker */
+/** @service api, shared-analysis-worker, import-worker, content-translation-worker */
 export const conversationViewSnapshotTable = pgTable(
     "conversation_view_snapshot",
     {
@@ -4562,7 +4628,7 @@ export const conversationViewSnapshotTable = pgTable(
     ],
 );
 
-/** @service api, shared-analysis-worker, content-translation-worker */
+/** @service api, shared-analysis-worker, content-translation-worker, scoring-worker */
 export const realtimeEventOutboxTable = pgTable(
     "realtime_event_outbox",
     {
@@ -4581,8 +4647,11 @@ export const realtimeEventOutboxTable = pgTable(
         index("realtime_event_outbox_conversation_replay_idx")
             .using("btree", sql`(${t.payload}->>'conversationSlugId')`, t.id)
             .where(
-                sql`${t.eventType} IN ('conversation_analysis_updated', 'conversation_settings_updated')`,
+                sql`${t.eventType} IN ('conversation_analysis_updated', 'conversation_settings_updated', 'conversation_survey_updated')`,
             ),
+        index("realtime_event_outbox_ranking_replay_idx")
+            .using("btree", sql`(${t.payload}->>'conversationSlugId')`, t.id)
+            .where(sql`${t.eventType} = 'conversation_ranking_stats_updated'`),
     ],
 );
 
@@ -5120,6 +5189,145 @@ export const rankingScoreTable = pgTable("ranking_score", {
         .defaultNow()
         .notNull(),
 });
+
+/** @service scoring-worker, api */
+export const rankingConversationStatsSnapshotTable = pgTable(
+    "ranking_conversation_stats_snapshot",
+    {
+        id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+        conversationId: integer("conversation_id")
+            .notNull()
+            .references(() => conversationTable.id),
+        itemCount: integer("item_count").notNull(),
+        totalItemCount: integer("total_item_count").notNull(),
+        voteCount: integer("vote_count").notNull(),
+        totalVoteCount: integer("total_vote_count").notNull(),
+        participantCount: integer("participant_count").notNull(),
+        totalParticipantCount: integer("total_participant_count").notNull(),
+        scoringInputRevision: bigint("scoring_input_revision", {
+            mode: "number",
+        }).notNull(),
+        isClosed: boolean("is_closed").notNull(),
+        createdAt: timestamp("created_at", {
+            mode: "date",
+            precision: 0,
+        })
+            .defaultNow()
+            .notNull(),
+    },
+    (table) => [
+        unique("ranking_stats_snapshot_id_conversation_unique").on(
+            table.id,
+            table.conversationId,
+        ),
+        index("ranking_conversation_stats_snapshot_latest_idx").using(
+            "btree",
+            table.conversationId,
+            sql`${table.createdAt} DESC`,
+            sql`${table.id} DESC`,
+        ),
+        check(
+            "ranking_conversation_stats_snapshot_counts_check",
+            sql`${table.itemCount} >= 0 AND ${table.itemCount} <= ${table.totalItemCount} AND ${table.voteCount} >= 0 AND ${table.voteCount} <= ${table.totalVoteCount} AND ${table.participantCount} >= 0 AND ${table.participantCount} <= ${table.totalParticipantCount} AND ${table.scoringInputRevision} >= 0`,
+        ),
+    ],
+);
+
+/** @service scoring-worker, api */
+export const rankingConversationStatsItemTable = pgTable(
+    "ranking_conversation_stats_item",
+    {
+        id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+        statsSnapshotId: integer("stats_snapshot_id").notNull(),
+        conversationId: integer("conversation_id").notNull(),
+        rankingItemId: integer("ranking_item_id").notNull(),
+        rankingItemContentId: integer("ranking_item_content_id")
+            .notNull(),
+        lifecycleStatus:
+            rankingItemLifecycleStatusEnum("lifecycle_status").notNull(),
+        score: real("score"),
+        rank: integer("rank"),
+        participantCount: integer("participant_count").notNull(),
+        externalUrl: text("external_url"),
+    },
+    (table) => [
+        foreignKey({
+            columns: [table.statsSnapshotId, table.conversationId],
+            foreignColumns: [
+                rankingConversationStatsSnapshotTable.id,
+                rankingConversationStatsSnapshotTable.conversationId,
+            ],
+            name: "ranking_stats_item_snapshot_conversation_fk",
+        }),
+        foreignKey({
+            columns: [table.rankingItemId, table.conversationId],
+            foreignColumns: [rankingItemTable.id, rankingItemTable.conversationId],
+            name: "ranking_stats_item_item_conversation_fk",
+        }),
+        foreignKey({
+            columns: [table.rankingItemContentId, table.rankingItemId],
+            foreignColumns: [rankingItemContentTable.id, rankingItemContentTable.rankingItemId],
+            name: "ranking_stats_item_content_item_fk",
+        }),
+        uniqueIndex("ranking_stats_item_snapshot_item_unique").on(
+            table.statsSnapshotId,
+            table.rankingItemId,
+        ),
+        check(
+            "ranking_stats_item_score_rank_check",
+            sql`((${table.score} IS NULL AND ${table.rank} IS NULL) OR (${table.score} IS NOT NULL AND ${table.rank} IS NOT NULL AND ${table.score} >= 0 AND ${table.score} <= 1 AND ${table.rank} > 0))`,
+        ),
+        check(
+            "ranking_stats_item_participant_count_check",
+            sql`${table.participantCount} >= 0`,
+        ),
+    ],
+);
+
+/** @service scoring-worker, api */
+export const rankingConversationStatsCheckpointTable = pgTable(
+    "ranking_conversation_stats_checkpoint",
+    {
+        id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+        statsSnapshotId: integer("stats_snapshot_id").notNull(),
+        conversationId: integer("conversation_id").notNull(),
+        reason: rankingStatsCheckpointReasonEnum("reason").notNull(),
+        participantMilestone: integer("participant_milestone"),
+        voteMilestone: integer("vote_milestone"),
+        createdAt: timestamp("created_at", {
+            mode: "date",
+            precision: 0,
+        })
+            .defaultNow()
+            .notNull(),
+    },
+    (table) => [
+        foreignKey({
+            columns: [table.statsSnapshotId, table.conversationId],
+            foreignColumns: [
+                rankingConversationStatsSnapshotTable.id,
+                rankingConversationStatsSnapshotTable.conversationId,
+            ],
+            name: "ranking_stats_checkpoint_snapshot_conversation_fk",
+        }),
+        index("ranking_stats_checkpoint_snapshot_idx").on(
+            table.statsSnapshotId,
+        ),
+        uniqueIndex("ranking_stats_checkpoint_participant_unique")
+            .on(table.conversationId, table.participantMilestone)
+            .where(sql`${table.reason} = 'major_participation_milestone'`),
+        uniqueIndex("ranking_stats_checkpoint_vote_unique")
+            .on(table.conversationId, table.voteMilestone)
+            .where(sql`${table.reason} = 'major_vote_milestone'`),
+        uniqueIndex("ranking_stats_checkpoint_closed_unique")
+            .on(table.statsSnapshotId)
+            .where(sql`${table.reason} = 'conversation_closed'`),
+        check(
+            "ranking_stats_checkpoint_milestone_check",
+            sql`((${table.reason} = 'major_participation_milestone' AND ${table.participantMilestone} IS NOT NULL AND ${table.voteMilestone} IS NULL AND ${table.participantMilestone} > 0) OR (${table.reason} = 'major_vote_milestone' AND ${table.participantMilestone} IS NULL AND ${table.voteMilestone} IS NOT NULL AND ${table.voteMilestone} > 0) OR (${table.reason} = 'conversation_closed' AND ${table.participantMilestone} IS NULL AND ${table.voteMilestone} IS NULL))`,
+        ),
+    ],
+);
 
 // Canonical raw entity-level scores for one ranking_score computation.
 // The JSONB `scores` column on ranking_score is kept as a backup blob.

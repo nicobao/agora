@@ -15,7 +15,7 @@
       </div>
       <CheckpointTimeline
         v-else
-        :checkpoints="analysisCheckpoints"
+        :checkpoints="checkpointTimelineItems"
         :selected-checkpoint-id="selectedRouteCheckpoint"
         :is-live-selected="isLiveAnalysis"
         :is-live-paused="isLivePaused"
@@ -108,7 +108,7 @@
                   :aria-label="t('generateReport')"
                 >
                   <q-icon name="mdi-file-chart-outline" size="1rem" />
-                  <div>{{ t("report") }}</div>
+                  <span class="report-button__label">{{ t("report") }}</span>
                 </SpaLink>
               </div>
             </div>
@@ -226,7 +226,6 @@
               class="tabComponent"
             >
               <SurveyTab
-                :model-value="currentTab"
                 :conversation-slug-id="props.conversationSlugId"
                 :survey-gate="props.surveyGate"
                 :survey-query="props.surveyQuery"
@@ -235,7 +234,7 @@
                 :total-participant-count="analysisParticipantCount"
                 :compact-mode="currentTab === 'Summary'"
                 :conversation-scroll-context="props.conversationScrollContext"
-                @update:model-value="onTabChange"
+                @switch-to-survey="onTabChange('Survey')"
               />
             </div>
           </div>
@@ -420,7 +419,10 @@ import {
   type AnalysisPageTranslations,
   analysisPageTranslations,
 } from "./AnalysisPage.i18n";
-import type { CheckpointTimelineReasonPayload } from "./CheckpointTimeline.types";
+import type {
+  CheckpointTimelineItem,
+  CheckpointTimelineReasonPayload,
+} from "./CheckpointTimeline.types";
 import CheckpointTimeline from "./CheckpointTimeline.vue";
 import ConsensusTab from "./consensusTab/ConsensusTab.vue";
 import DivisiveTab from "./divisivenessTab/DivisiveTab.vue";
@@ -612,6 +614,15 @@ const analysisCheckpoints = computed<AnalysisCheckpoint[]>(() => {
     (checkpoint) => checkpoint.conversationViewSnapshotId <= liveViewSnapshotId
   );
 });
+const checkpointTimelineItems = computed<
+  CheckpointTimelineItem<AnalysisCheckpoint["reasons"][number]>[]
+>(() =>
+  analysisCheckpoints.value.map((checkpoint) => ({
+    checkpointId: checkpoint.conversationViewSnapshotId,
+    activatedAt: checkpoint.activatedAt,
+    reasons: checkpoint.reasons,
+  }))
+);
 
 const latestCheckpoint = computed(() => {
   if (analysisCheckpoints.value.length === 0) {
@@ -1705,11 +1716,10 @@ defineExpose({
     border-color: #6b4eff;
     color: #6b4eff;
   }
-
 }
 
 @container (max-width: 34rem) {
-  .report-button {
+  .report-button__label {
     display: none;
   }
 }

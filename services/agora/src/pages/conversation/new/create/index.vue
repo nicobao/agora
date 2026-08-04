@@ -102,7 +102,6 @@
 
           <Editor
             v-model="title"
-            v-model:plain-text="titlePlainText"
             :placeholder="t('titlePlaceholder')"
             :show-toolbar="false"
             :single-line="true"
@@ -138,7 +137,6 @@
           <div class="editor-style">
             <Editor
               v-model="content"
-              v-model:plain-text="contentPlainText"
               :placeholder="t('bodyPlaceholder')"
               min-height="5rem"
               :show-toolbar="true"
@@ -184,6 +182,7 @@ import NewConversationControlBar from "src/components/newConversation/NewConvers
 import NewConversationLayout from "src/components/newConversation/NewConversationLayout.vue";
 import NewConversationRouteGuard from "src/components/newConversation/NewConversationRouteGuard.vue";
 import {
+  resolveSelectedOrganizationSlug,
   useConversationDraft,
   type ValidationErrorField,
 } from "src/composables/conversation/draft";
@@ -239,7 +238,6 @@ const isNavigatingAway = ref(false);
 const {
   title,
   content,
-  contentPlainText,
   multilingualSetting,
   selectedProjectSlug,
   inheritProjectLanguages,
@@ -266,7 +264,6 @@ const {
 const isSubmitButtonLoading = ref(false);
 const isTitleOverLimit = ref(false);
 const isBodyOverLimit = ref(false);
-const titlePlainText = ref("");
 
 function getConversationTypeConfig(): ConversationTypeConfig {
   if (conversationType.value === "ranking") {
@@ -328,8 +325,8 @@ const polisUrlInputRef = ref<InstanceType<typeof PolisUrlInput> | null>(null);
 const polisCsvUploadRef = ref<InstanceType<typeof PolisCsvUpload> | null>(null);
 const titleInputRef = ref<HTMLDivElement | null>(null);
 
-const { validateSelectedOrganization } = useNewPostDraftsStore();
 const { conversationDraft } = storeToRefs(useNewPostDraftsStore());
+const { profileData } = storeToRefs(useUserStore());
 
 const { createNewConversationIntention } = useLoginIntentionStore();
 const { isLoggedIn } = storeToRefs(useAuthenticationStore());
@@ -352,19 +349,48 @@ watch(
     isLoggedIn: isLoggedIn.value,
     postAsOrganization: postAs.value.postAsOrganization,
     organizationName: postAs.value.organizationName,
+    profileDataLoaded: profileData.value.dataLoaded,
+    organizationList: profileData.value.organizationList,
   }),
-  async ({ isLoggedIn, postAsOrganization, organizationName }) => {
+  async ({
+    isLoggedIn,
+    postAsOrganization,
+    organizationName,
+    profileDataLoaded,
+    organizationList,
+  }) => {
     const requestId = ++projectOptionsRequestId;
     projectLanguageProjects.value = [];
     selectedProjectSlug.value = undefined;
     inheritProjectLanguages.value = false;
 
-    if (!isLoggedIn || !postAsOrganization || organizationName === "") {
+    if (
+      !isLoggedIn ||
+      !postAsOrganization ||
+      organizationName === "" ||
+      !profileDataLoaded
+    ) {
+      return;
+    }
+
+    const organizationSlug = resolveSelectedOrganizationSlug({
+      organizationIdentifier: organizationName,
+      organizationList,
+    });
+    if (organizationSlug === undefined) {
+      return;
+    }
+
+    if (organizationSlug !== organizationName) {
+      postAs.value = {
+        postAsOrganization: true,
+        organizationName: organizationSlug,
+      };
       return;
     }
 
     const response = await fetchConversationCreateProjectOptions({
-      postAsOrganizationName: organizationName,
+      postAsOrganizationSlug: organizationSlug,
     });
     if (requestId !== projectOptionsRequestId) {
       return;
@@ -521,7 +547,7 @@ async function handleImportSubmission(): Promise<void> {
         votesFile: files.votes,
         projectSlug: conversationDraft.value.selectedProjectSlug,
         languageSettingsSource,
-        postAsOrganizationName: conversationDraft.value.postAs.organizationName,
+        postAsOrganizationSlug: conversationDraft.value.postAs.organizationName,
         isIndexed: !conversationDraft.value.isPrivate,
         participationMode: conversationDraft.value.participationMode,
         multilingualSetting: conversationDraft.value.multilingualSetting,
@@ -558,7 +584,7 @@ async function handleImportSubmission(): Promise<void> {
       polisUrl: conversationDraft.value.importSettings.polisUrl,
       projectSlug: conversationDraft.value.selectedProjectSlug,
       languageSettingsSource,
-      postAsOrganizationName: conversationDraft.value.postAs.organizationName,
+      postAsOrganizationSlug: conversationDraft.value.postAs.organizationName,
       isIndexed: !conversationDraft.value.isPrivate,
       participationMode: conversationDraft.value.participationMode,
       multilingualSetting: conversationDraft.value.multilingualSetting,
@@ -630,12 +656,8 @@ async function onSubmit(): Promise<void> {
   }
 }
 
-// Validate organization on mount
 onMounted(() => {
   normalizeCreateHistoryState();
-
-  const { profileData } = storeToRefs(useUserStore());
-  validateSelectedOrganization(profileData.value.organizationList);
 });
 </script>
 

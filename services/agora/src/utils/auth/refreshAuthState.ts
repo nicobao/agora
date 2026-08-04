@@ -4,19 +4,23 @@ import {
   type DeviceLoginStatus,
   zodDeviceLoginStatus,
 } from "src/shared/types/zod";
-import { useAuthenticationStore } from "src/stores/authentication";
 import { api } from "src/utils/api/client";
 import {
   buildAuthorizationHeader,
-  buildUcan,
-  createDidIfDoesNotExist,
+  buildUcanForRequestWithDid,
 } from "src/utils/crypto/ucan/operation";
 
-import { resetLocalAuthState } from "./localAuthState";
+import { applyBackendAuthStatus } from "./backendAuthState";
+import { clearAccountScopedState } from "./localAuthState";
 
 export interface AuthStateRefreshResult {
   authStateChanged: boolean;
   needsCacheRefresh: boolean;
+}
+
+export interface BackendDeviceLoginStatus {
+  didWrite: string;
+  loginStatus: DeviceLoginStatus;
 }
 
 const unknownDeviceLoginStatus = {
@@ -26,29 +30,11 @@ const unknownDeviceLoginStatus = {
   credentials: { email: null, phone: null, rarimo: null },
 } satisfies DeviceLoginStatus;
 
-async function buildEncodedUcanForGeneratedRequest({
-  url,
-  method,
+async function requestDeviceLoginStatus({
+  encodedUcan,
 }: {
-  url: string;
-  method: string | undefined;
-}): Promise<string> {
-  const { did, prefixedKey } = await createDidIfDoesNotExist();
-  return await buildUcan({
-    did,
-    prefixedKey,
-    pathname: url,
-    method,
-  });
-}
-
-async function getDeviceLoginStatus(): Promise<DeviceLoginStatus> {
-  const { url, options } =
-    await DefaultApiAxiosParamCreator().apiV1AuthCheckLoginStatusPost();
-  const encodedUcan = await buildEncodedUcanForGeneratedRequest({
-    url,
-    method: options.method,
-  });
+  encodedUcan: string;
+}): Promise<DeviceLoginStatus> {
   const response = await DefaultApiFactory(
     undefined,
     undefined,
@@ -62,48 +48,78 @@ async function getDeviceLoginStatus(): Promise<DeviceLoginStatus> {
   return zodDeviceLoginStatus.parse(response.data.loggedInStatus);
 }
 
+async function buildBackendAuthRequest(): Promise<{
+  didWrite: string;
+  encodedUcan: string;
+}> {
+  const { url, options } =
+    await DefaultApiAxiosParamCreator().apiV1AuthCheckLoginStatusPost();
+  return await buildUcanForRequestWithDid({
+    pathname: url,
+    method: options.method,
+  });
+}
+
+export async function requestBackendDeviceLoginStatus(): Promise<BackendDeviceLoginStatus> {
+  const { didWrite, encodedUcan } = await buildBackendAuthRequest();
+  return {
+    didWrite,
+    loginStatus: await requestDeviceLoginStatus({ encodedUcan }),
+  };
+}
+
+export async function requestBackendAuthStatus(): Promise<BackendDeviceLoginStatus> {
+  const { didWrite, encodedUcan } = await buildBackendAuthRequest();
+  try {
+    return {
+      didWrite,
+      loginStatus: await requestDeviceLoginStatus({ encodedUcan }),
+    };
+  } catch (error) {
+    if (!isAxiosError(error) || error.response?.status !== 401) {
+      throw error;
+    }
+
+    return { didWrite, loginStatus: unknownDeviceLoginStatus };
+  }
+}
+
 async function applyRefreshedAuthState({
   loginStatus,
+  didWrite,
 }: {
   loginStatus: DeviceLoginStatus;
+  didWrite: string;
 }): Promise<AuthStateRefreshResult> {
-  const authStore = useAuthenticationStore();
+  const application = await applyBackendAuthStatus({ loginStatus, didWrite });
+  if (application.type === "ignored") {
+    return { authStateChanged: false, needsCacheRefresh: false };
+  }
+  if (application.type === "reset") {
+    return { authStateChanged: true, needsCacheRefresh: false };
+  }
   const {
     oldLoginStatus,
     newLoginStatus,
     oldIsGuestOrLoggedIn,
     newIsGuestOrLoggedIn,
-  } = authStore.setLoginStatus(loginStatus);
+  } = application.transition;
 
   const oldUserId = oldLoginStatus.isKnown ? oldLoginStatus.userId : undefined;
   const newUserId = newLoginStatus.isKnown ? newLoginStatus.userId : undefined;
   const authStateChanged =
     oldIsGuestOrLoggedIn !== newIsGuestOrLoggedIn || oldUserId !== newUserId;
+  const knownUserChanged =
+    oldLoginStatus.isKnown && newLoginStatus.isKnown && oldUserId !== newUserId;
 
-  if (!newLoginStatus.isKnown) {
-    await resetLocalAuthState({
-      shouldClearLanguagePreferences:
-        oldIsGuestOrLoggedIn && !newIsGuestOrLoggedIn,
-    });
-    return { authStateChanged: true, needsCacheRefresh: false };
+  if (knownUserChanged) {
+    clearAccountScopedState();
   }
 
   return { authStateChanged, needsCacheRefresh: authStateChanged };
 }
 
-export async function refreshAuthStateFromBackend(): Promise<
-  AuthStateRefreshResult
-> {
-  try {
-    const loginStatus = await getDeviceLoginStatus();
-    return await applyRefreshedAuthState({ loginStatus });
-  } catch (error) {
-    if (isAxiosError(error) && error.response?.status === 401) {
-      return await applyRefreshedAuthState({
-        loginStatus: unknownDeviceLoginStatus,
-      });
-    }
-
-    throw error;
-  }
+export async function refreshAuthStateFromBackend(): Promise<AuthStateRefreshResult> {
+  const { loginStatus, didWrite } = await requestBackendAuthStatus();
+  return await applyRefreshedAuthState({ loginStatus, didWrite });
 }

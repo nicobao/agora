@@ -77,11 +77,7 @@
       <!-- Manual: Add Seed Opinions Section -->
       <div v-else class="seed-opinions-section">
         <div class="section-title">
-          {{
-            isMaxDiffDraft
-              ? t("addMaxDiffItems")
-              : t("addSeedOpinions")
-          }}
+          {{ isMaxDiffDraft ? t("addMaxDiffItems") : t("addSeedOpinions") }}
         </div>
         <p class="section-description">
           {{
@@ -89,6 +85,7 @@
               ? t("maxDiffSeedDescription")
               : t("seedOpinionsDescription")
           }}
+          <span class="shortcut-hint">{{ t("addStatementShortcut") }}</span>
         </p>
 
         <!-- Seed Opinions List -->
@@ -106,32 +103,28 @@
             :model-value="opinion"
             :error-message="opinionErrors[index]"
             :is-active="currentActiveOpinionIndex === index"
-            :submit-on-enter="true"
+            :disabled="isSubmitButtonLoading"
             @update:model-value="
               (val) => {
                 conversationDraft.seedOpinions[index] = val;
+                clearOpinionError(index);
               }
             "
             @focus="
               () => {
                 currentActiveOpinionIndex = index;
-                clearOpinionError(index);
               }
             "
             @blur="currentActiveOpinionIndex = -1"
-            @enter="addNewOpinion"
+            @add-next="addNewOpinion"
             @remove="removeOpinion(index)"
           />
         </div>
 
         <!-- Add Opinion Button -->
-        <div class="add-button-container">
+        <div v-if="!isSubmitButtonLoading" class="add-button-container">
           <ConversationControlButton
-            :label="
-              isMaxDiffDraft
-                ? t('addMaxDiffItem')
-                : t('addOpinion')
-            "
+            :label="isMaxDiffDraft ? t('addMaxDiffItem') : t('addOpinion')"
             icon="pi pi-plus"
             :show-border="false"
             icon-position="left"
@@ -186,11 +179,12 @@ import SeedOpinionItem from "src/components/newConversation/SeedOpinionItem.vue"
 import ErrorRetryBlock from "src/components/ui/ErrorRetryBlock.vue";
 import { useConversationDraft } from "src/composables/conversation/draft";
 import { useCreateSurveyAccess } from "src/composables/conversation/useCreateSurveyAccess";
+import type { SeedOpinionCreateFailure } from "src/composables/conversation/usePublishConversationDraft";
 import { usePublishConversationDraft } from "src/composables/conversation/usePublishConversationDraft";
 import { useComponentI18n } from "src/composables/ui/useComponentI18n";
 import {
-  MAX_LENGTH_OPINION,
-  validateHtmlStringCharacterCount,
+  type RichTextValidationFailure,
+  validateRichTextInput,
 } from "src/shared/shared";
 import { useAuthenticationStore } from "src/stores/authentication";
 import { useLoginIntentionStore } from "src/stores/loginIntention";
@@ -357,6 +351,10 @@ function clearOpinionError(index: number) {
 }
 
 async function addNewOpinion(): Promise<void> {
+  if (isSubmitButtonLoading.value) {
+    return;
+  }
+
   conversationDraft.value.seedOpinions.push("");
   const newIndex = conversationDraft.value.seedOpinions.length - 1;
 
@@ -372,17 +370,17 @@ async function addNewOpinion(): Promise<void> {
     });
   }
 
-  // Focus the new opinion's editor
   const newComponent = opinionComponentRefs.value[newIndex];
   if (newComponent) {
-    // Small delay to ensure scroll completes before focus
-    setTimeout(() => {
-      newComponent.focus();
-    }, 100);
+    newComponent.focus();
   }
 }
 
 function removeOpinion(index: number): void {
+  if (isSubmitButtonLoading.value) {
+    return;
+  }
+
   conversationDraft.value.seedOpinions.splice(index, 1);
   // Clear any error for this index
   clearOpinionError(index);
@@ -434,13 +432,14 @@ function validateSeedOpinions(): boolean {
     return true;
   }
 
-  // MaxDiff requires minimum 2 seed opinions
-  if (
-    isMaxDiffDraft.value &&
-    conversationDraft.value.seedOpinions.filter(
-      (s: string) => s.trim().length > 0
-    ).length < 2
-  ) {
+  const validationResults = conversationDraft.value.seedOpinions.map((html) =>
+    validateRichTextInput({ htmlString: html, mode: "opinion" })
+  );
+  const visibleOpinionCount = validationResults.filter(
+    (result) => result.success || result.reason !== "plain_text_empty"
+  ).length;
+
+  if (isMaxDiffDraft.value && visibleOpinionCount < 2) {
     showNotifyMessage(t("needMinimumForMaxDiff"));
     return false;
   }
@@ -451,44 +450,34 @@ function validateSeedOpinions(): boolean {
   let hasErrors = false;
   let firstErrorIndex = -1;
 
-  // Check each opinion for validation issues
-  conversationDraft.value.seedOpinions.forEach(
-    (opinion: string, index: number) => {
-      const trimmedOpinion = opinion.trim();
-
-      // Check for empty opinions
-      if (trimmedOpinion.length === 0) {
-        opinionErrors.value[index] = t("opinionCannotBeEmpty");
-        hasErrors = true;
-        if (firstErrorIndex === -1) firstErrorIndex = index;
-        return;
-      }
-
-      // Check word count limit
-      const validation = validateHtmlStringCharacterCount(opinion, "opinion");
-      if (!validation.isValid) {
-        opinionErrors.value[index] = t("opinionExceedsLimit")
-          .replaceAll("{limit}", MAX_LENGTH_OPINION.toString())
-          .replaceAll("{count}", validation.characterCount.toString());
-        hasErrors = true;
-        if (firstErrorIndex === -1) firstErrorIndex = index;
-        return;
-      }
-
-      // Check for duplicate opinions
-      const duplicateIndex = conversationDraft.value.seedOpinions.findIndex(
-        (otherOpinion: string, otherIndex: number) =>
-          otherIndex !== index &&
-          otherOpinion.trim().toLowerCase() === trimmedOpinion.toLowerCase()
-      );
-
-      if (duplicateIndex !== -1) {
-        opinionErrors.value[index] = t("opinionDuplicate");
-        hasErrors = true;
-        if (firstErrorIndex === -1) firstErrorIndex = index;
-      }
-    }
+  const comparisonKeys = validationResults.map((result) =>
+    result.success ? result.plainText.trim().toLocaleLowerCase() : undefined
   );
+  const comparisonKeyCounts = new Map<string, number>();
+  for (const key of comparisonKeys) {
+    if (key !== undefined) {
+      comparisonKeyCounts.set(key, (comparisonKeyCounts.get(key) ?? 0) + 1);
+    }
+  }
+
+  validationResults.forEach((validation, index) => {
+    if (!validation.success) {
+      opinionErrors.value[index] = getOpinionValidationMessage(validation);
+      hasErrors = true;
+      if (firstErrorIndex === -1) firstErrorIndex = index;
+      return;
+    }
+
+    const comparisonKey = comparisonKeys[index];
+    if (
+      comparisonKey !== undefined &&
+      (comparisonKeyCounts.get(comparisonKey) ?? 0) > 1
+    ) {
+      opinionErrors.value[index] = t("opinionDuplicate");
+      hasErrors = true;
+      if (firstErrorIndex === -1) firstErrorIndex = index;
+    }
+  });
 
   // If there are errors, scroll to the first problematic item
   if (hasErrors && firstErrorIndex !== -1) {
@@ -506,7 +495,42 @@ function validateSeedOpinions(): boolean {
   return !hasErrors;
 }
 
+function getOpinionValidationMessage({
+  reason,
+  count,
+  limit,
+}: {
+  reason: RichTextValidationFailure["reason"];
+  count: RichTextValidationFailure["count"];
+  limit: RichTextValidationFailure["limit"];
+}): string {
+  if (reason === "plain_text_empty") {
+    return t("opinionCannotBeEmpty");
+  }
+
+  if (reason === "html_too_long") {
+    return t("errorCreatingConversation");
+  }
+
+  return t("opinionExceedsLimit")
+    .replaceAll("{limit}", limit.toString())
+    .replaceAll("{count}", count.toString());
+}
+
+function showSeedOpinionFailure(failure: SeedOpinionCreateFailure): void {
+  opinionErrors.value[failure.index] = getOpinionValidationMessage(failure);
+  setTimeout(() => {
+    const errorElement = opinionRefs.value[failure.index];
+    errorElement?.scrollIntoView({ behavior: "smooth", block: "center" });
+    opinionComponentRefs.value[failure.index]?.focus();
+  }, 100);
+}
+
 async function onSubmit() {
+  if (isSubmitButtonLoading.value) {
+    return;
+  }
+
   if (!isLoggedIn.value) {
     showLoginDialog.value = true;
     return;
@@ -516,6 +540,7 @@ async function onSubmit() {
     return;
   }
 
+  isSubmitButtonLoading.value = true;
   const canCreateSurvey = await refreshSurveyCreationAccess();
 
   if (canCreateSurvey) {
@@ -528,12 +553,12 @@ async function onSubmit() {
     return;
   }
 
-  isSubmitButtonLoading.value = true;
   const wasPublished = await publishConversationDraft({
     conversationDraft: conversationDraft.value,
     surveyConfig: null,
     invalidSurveyMessage: t("errorCreatingConversation"),
     defaultErrorMessage: t("errorCreatingConversation"),
+    onSeedOpinionFailure: showSeedOpinionFailure,
     beforeSuccessNavigation: () => {
       routeGuard.value?.unlockRoute();
       isNavigatingAway.value = true;
@@ -578,6 +603,13 @@ async function onSubmit() {
   font-size: 0.9rem;
   line-height: 1.4;
   margin: 0;
+}
+
+.shortcut-hint {
+  display: block;
+  margin-block-start: 0.5rem;
+  color: $color-text-weak;
+  font-size: 0.85rem;
 }
 
 .add-button-container {

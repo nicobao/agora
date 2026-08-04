@@ -1,7 +1,6 @@
 import { httpErrors } from "@fastify/sensible";
 import {
     and,
-    count,
     desc,
     eq,
     inArray,
@@ -9,7 +8,6 @@ import {
     isNull,
     lt,
     or,
-    sql,
     type SQL,
 } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
@@ -18,7 +16,6 @@ import {
     conversationContentTranslationTable,
     conversationTable,
     conversationTranslationTargetLanguageTable,
-    conversationViewSnapshotTable,
     contentTranslationWorkTable,
     organizationLocalizationTable,
     organizationTable,
@@ -61,9 +58,13 @@ import type {
     ProjectDisplayedContent,
 } from "@/shared/types/zod.js";
 import { imagePathToUrl } from "@/utils/organizationLogic.js";
+import { optionalHttpsUrl } from "@/utils/url.js";
 import { translationSourceMatchesCurrentSource } from "@/shared-backend/translate.js";
 import { buildTranslationMetadata } from "./contentTranslationContent.js";
-import { toDisplayedContent } from "./displayContent.js";
+import {
+    type DisplayedContentTranslationControl,
+    toDisplayedContent,
+} from "./displayContent.js";
 import {
     getImplicitDefaultDisplayLanguage,
     resolveOrganizationLocalizationRow,
@@ -79,6 +80,10 @@ import {
     shouldTranslateContent,
     sourceLanguageToDisplayLanguage,
 } from "./translationLanguageSetting.js";
+import {
+    fetchConversationDisplayCountsByConversationId,
+    type ConversationDisplayCounts,
+} from "./conversationDisplayCounts.js";
 
 interface ProjectPageServiceParams {
     db: PostgresJsDatabase;
@@ -111,18 +116,19 @@ interface ConversationProjectBaseRow extends ProjectBaseRow {
     conversationSlugId: string;
 }
 
-interface ConversationDisplayCounts {
-    conversationId: number;
-    opinionCount: number;
-    participantCount: number;
-    voteCount: number;
-}
-
 type ProjectPageTranslationStatus = Exclude<
     LocalizedContentTranslationStatus,
     "completed"
 >;
 type ProjectActivityDisplayContent = ProjectPageActivity["displayContent"];
+type UnlistedProjectActivity = Extract<
+    ProjectPageActivity,
+    { isIndexed: false }
+>;
+interface ProjectActivityContentPresentation {
+    displayContent: ProjectActivityDisplayContent;
+    alternateContent?: UnlistedProjectActivity["alternateContent"];
+}
 
 export interface ProjectContentResolutionProject {
     projectContentPublicId: string;
@@ -184,10 +190,6 @@ interface ProjectContentTranslationRow extends ProjectContentTranslationResoluti
 function optionalText(value: string | null): string | undefined {
     const trimmed = value?.trim();
     return trimmed === undefined || trimmed === "" ? undefined : trimmed;
-}
-
-function optionalUrl(value: string | null): string | undefined {
-    return value ?? undefined;
 }
 
 function getInitials(displayName: string): string {
@@ -268,7 +270,9 @@ function getLanguageCandidateSet({
     defaultLanguageCode: SupportedDisplayLanguageCodes;
 }): Set<SupportedDisplayLanguageCodes> {
     return new Set([
-        ...getDisplayLanguageFallbackChain({ languageCode: effectiveLanguageCode }),
+        ...getDisplayLanguageFallbackChain({
+            languageCode: effectiveLanguageCode,
+        }),
         defaultLanguageCode,
     ]);
 }
@@ -295,7 +299,8 @@ async function fetchProjectBaseBySlug({
             sourceLanguageCode: projectContentTable.sourceLanguageCode,
             sourceRawLanguageCode: projectContentTable.sourceRawLanguageCode,
             sourceLanguageProvider: projectContentTable.sourceLanguageProvider,
-            sourceLanguageConfidence: projectContentTable.sourceLanguageConfidence,
+            sourceLanguageConfidence:
+                projectContentTable.sourceLanguageConfidence,
         })
         .from(projectTable)
         .innerJoin(
@@ -347,10 +352,14 @@ async function fetchProjectBasesByConversationSlug({
             sourceLanguageCode: projectContentTable.sourceLanguageCode,
             sourceRawLanguageCode: projectContentTable.sourceRawLanguageCode,
             sourceLanguageProvider: projectContentTable.sourceLanguageProvider,
-            sourceLanguageConfidence: projectContentTable.sourceLanguageConfidence,
+            sourceLanguageConfidence:
+                projectContentTable.sourceLanguageConfidence,
         })
         .from(conversationTable)
-        .innerJoin(projectTable, eq(projectTable.id, conversationTable.projectId))
+        .innerJoin(
+            projectTable,
+            eq(projectTable.id, conversationTable.projectId),
+        )
         .innerJoin(
             projectContentTable,
             eq(projectContentTable.id, projectTable.currentContentId),
@@ -400,7 +409,10 @@ async function fetchProjectTargetLanguagesByProjectId({
         .from(projectTranslationTargetLanguageTable)
         .where(
             and(
-                inArray(projectTranslationTargetLanguageTable.projectId, uniqueProjectIds),
+                inArray(
+                    projectTranslationTargetLanguageTable.projectId,
+                    uniqueProjectIds,
+                ),
                 isNull(projectTranslationTargetLanguageTable.deletedAt),
             ),
         );
@@ -682,7 +694,8 @@ async function fetchResolvedProjectContent({
             subtitle: projectContentTranslationTable.translatedSubtitle,
             body: projectContentTranslationTable.translatedBody,
             sourceKind: projectContentTranslationTable.sourceKind,
-            sourceLanguageCode: projectContentTranslationTable.sourceLanguageCode,
+            sourceLanguageCode:
+                projectContentTranslationTable.sourceLanguageCode,
         })
         .from(projectContentTranslationTable)
         .where(
@@ -743,7 +756,8 @@ async function fetchProjectContentTranslationsByContentId({
             subtitle: projectContentTranslationTable.translatedSubtitle,
             body: projectContentTranslationTable.translatedBody,
             sourceKind: projectContentTranslationTable.sourceKind,
-            sourceLanguageCode: projectContentTranslationTable.sourceLanguageCode,
+            sourceLanguageCode:
+                projectContentTranslationTable.sourceLanguageCode,
         })
         .from(projectContentTranslationTable)
         .where(
@@ -820,15 +834,26 @@ function toProjectActivityDisplayContent({
     row,
     translation,
     targetLanguageCode,
-    translationAllowed,
     displayLanguage,
+    mode,
+    canRequestAlternate,
 }: {
     row: ProjectActivityRow;
     translation: ProjectActivityContentTranslationRow | undefined;
     targetLanguageCode: SupportedDisplayLanguageCodes;
-    translationAllowed: boolean;
     displayLanguage: SupportedDisplayLanguageCodes;
+    mode: "original" | "translated" | undefined;
+    canRequestAlternate: boolean;
 }): ProjectActivityDisplayContent {
+    const toActivityTranslationControl = (
+        translationControl: DisplayedContentTranslationControl | null,
+    ): DisplayedContentTranslationControl | null =>
+        translationControl === null
+            ? null
+            : {
+                  ...translationControl,
+                  canRequestAlternate,
+              };
     const original = {
         title: row.title,
         bodyPlainText: row.bodyPlainText ?? "",
@@ -877,29 +902,140 @@ function toProjectActivityDisplayContent({
 
     return toDisplayedContent({
         content: localizedContent,
-        translationAllowed,
+        translationAllowed: row.dynamicTranslationEnabled,
         displayLanguage,
         spokenLanguages: [],
+        mode,
         buildOriginal: ({ original: content, translationControl }) => ({
             sourceVersion: localizedContent.sourceVersion,
             status: "available",
             mode: "original",
             content,
-            translationControl,
+            translationControl:
+                toActivityTranslationControl(translationControl),
         }),
         buildTranslated: ({ translated: content, translationControl }) => ({
             sourceVersion: localizedContent.sourceVersion,
             status: "available",
             mode: "translated",
             content,
-            translationControl,
+            translationControl:
+                toActivityTranslationControl(translationControl),
         }),
         buildUnavailable: ({ status, translationControl }) => ({
             sourceVersion: localizedContent.sourceVersion,
             status,
-            translationControl,
+            translationControl:
+                toActivityTranslationControl(translationControl),
         }),
     });
+}
+
+function toProjectActivityContentPresentation({
+    row,
+    translation,
+    targetLanguageCode,
+    displayLanguage,
+}: {
+    row: ProjectActivityRow;
+    translation: ProjectActivityContentTranslationRow | undefined;
+    targetLanguageCode: SupportedDisplayLanguageCodes;
+    displayLanguage: SupportedDisplayLanguageCodes;
+}): ProjectActivityContentPresentation {
+    const displayContent = toProjectActivityDisplayContent({
+        row,
+        translation,
+        targetLanguageCode,
+        displayLanguage,
+        mode: undefined,
+        canRequestAlternate: row.isIndexed,
+    });
+    if (
+        row.isIndexed ||
+        displayContent.status !== "available" ||
+        displayContent.translationControl === null
+    ) {
+        return { displayContent };
+    }
+
+    const alternateDisplayContent = toProjectActivityDisplayContent({
+        row,
+        translation,
+        targetLanguageCode,
+        displayLanguage,
+        mode: displayContent.translationControl.alternateMode,
+        canRequestAlternate: false,
+    });
+    if (alternateDisplayContent.status !== "available") {
+        return {
+            displayContent: {
+                ...displayContent,
+                translationControl: null,
+            },
+        };
+    }
+
+    return {
+        displayContent: {
+            ...displayContent,
+            translationControl: {
+                ...displayContent.translationControl,
+                canRequestAlternate: true,
+            },
+        },
+        alternateContent: {
+            mode: alternateDisplayContent.mode,
+            content: alternateDisplayContent.content,
+        },
+    };
+}
+
+export function toProjectPageActivity({
+    row,
+    translation,
+    targetLanguageCode,
+    displayLanguage,
+    counts,
+}: {
+    row: ProjectActivityRow;
+    translation: ProjectActivityContentTranslationRow | undefined;
+    targetLanguageCode: SupportedDisplayLanguageCodes;
+    displayLanguage: SupportedDisplayLanguageCodes;
+    counts: ConversationDisplayCounts | undefined;
+}): ProjectPageActivity {
+    const presentation = toProjectActivityContentPresentation({
+        row,
+        translation,
+        targetLanguageCode,
+        displayLanguage,
+    });
+    const activityBase = {
+        conversationType: row.conversationType,
+        isClosed: row.isClosed,
+        createdAt: row.createdAt,
+        isEdited: row.isEdited,
+        displayContent: presentation.displayContent,
+        stats: {
+            opinionCount: counts?.opinionCount ?? 0,
+            participantCount: counts?.participantCount ?? 0,
+            voteCount: counts?.voteCount ?? 0,
+        },
+    };
+    if (row.isIndexed) {
+        return {
+            ...activityBase,
+            isIndexed: true,
+            slugId: row.slugId,
+        };
+    }
+    if (presentation.alternateContent === undefined) {
+        return { ...activityBase, isIndexed: false };
+    }
+    return {
+        ...activityBase,
+        isIndexed: false,
+        alternateContent: presentation.alternateContent,
+    };
 }
 
 async function fetchProjectTranslationWorkStatus({
@@ -917,8 +1053,14 @@ async function fetchProjectTranslationWorkStatus({
         .where(
             and(
                 eq(contentTranslationWorkTable.sourceKind, "project"),
-                eq(contentTranslationWorkTable.projectContentId, projectContentId),
-                eq(contentTranslationWorkTable.displayLanguageCode, targetLanguageCode),
+                eq(
+                    contentTranslationWorkTable.projectContentId,
+                    projectContentId,
+                ),
+                eq(
+                    contentTranslationWorkTable.displayLanguageCode,
+                    targetLanguageCode,
+                ),
             ),
         )
         .limit(1);
@@ -983,38 +1125,6 @@ async function fetchResolvedBannerImageUrl({
         isFullImagePath: project.bannerIsFullPath,
         baseImageServiceUrl,
     });
-}
-
-async function fetchLatestConversationCounts({
-    db,
-    conversationIds,
-}: {
-    db: PostgresJsDatabase;
-    conversationIds: number[];
-}): Promise<Map<number, ConversationDisplayCounts>> {
-    if (conversationIds.length === 0) {
-        return new Map();
-    }
-    const rows = await db
-        .selectDistinctOn([conversationViewSnapshotTable.conversationId], {
-            conversationId: conversationViewSnapshotTable.conversationId,
-            opinionCount: conversationViewSnapshotTable.opinionCount,
-            participantCount: conversationViewSnapshotTable.participantCount,
-            voteCount: conversationViewSnapshotTable.voteCount,
-        })
-        .from(conversationViewSnapshotTable)
-        .where(
-            and(
-                inArray(conversationViewSnapshotTable.conversationId, conversationIds),
-                isNotNull(conversationViewSnapshotTable.activatedAt),
-            ),
-        )
-        .orderBy(
-            conversationViewSnapshotTable.conversationId,
-            desc(conversationViewSnapshotTable.createdAt),
-            desc(conversationViewSnapshotTable.id),
-        );
-    return new Map(rows.map((row) => [row.conversationId, row]));
 }
 
 function rowToActivityCursor({
@@ -1111,8 +1221,10 @@ async function fetchProjectActivityRows({
             title: conversationContentTable.title,
             bodyPlainText: conversationContentTable.bodyPlainText,
             sourceLanguageCode: conversationContentTable.sourceLanguageCode,
-            sourceRawLanguageCode: conversationContentTable.sourceRawLanguageCode,
-            dynamicTranslationEnabled: conversationTable.dynamicTranslationEnabled,
+            sourceRawLanguageCode:
+                conversationContentTable.sourceRawLanguageCode,
+            dynamicTranslationEnabled:
+                conversationTable.dynamicTranslationEnabled,
         })
         .from(conversationTable)
         .innerJoin(
@@ -1163,8 +1275,10 @@ async function fetchConversationTargetLanguagesByConversationId({
 
     const rows = await db
         .select({
-            conversationId: conversationTranslationTargetLanguageTable.conversationId,
-            languageCode: conversationTranslationTargetLanguageTable.languageCode,
+            conversationId:
+                conversationTranslationTargetLanguageTable.conversationId,
+            languageCode:
+                conversationTranslationTargetLanguageTable.languageCode,
         })
         .from(conversationTranslationTargetLanguageTable)
         .where(
@@ -1195,7 +1309,10 @@ async function fetchProjectActivityTranslations({
     preferredLanguageByContentId,
 }: {
     db: PostgresJsDatabase;
-    preferredLanguageByContentId: ReadonlyMap<number, SupportedDisplayLanguageCodes>;
+    preferredLanguageByContentId: ReadonlyMap<
+        number,
+        SupportedDisplayLanguageCodes
+    >;
 }): Promise<Map<number, ProjectActivityContentTranslationRow>> {
     const contentIds = [...preferredLanguageByContentId.keys()];
     if (contentIds.length === 0) {
@@ -1208,11 +1325,13 @@ async function fetchProjectActivityTranslations({
                 conversationContentTranslationTable.conversationContentId,
             displayLanguageCode:
                 conversationContentTranslationTable.displayLanguageCode,
-            translatedTitle: conversationContentTranslationTable.translatedTitle,
+            translatedTitle:
+                conversationContentTranslationTable.translatedTitle,
             translatedBody: conversationContentTranslationTable.translatedBody,
             translatedBodyPlainText:
                 conversationContentTranslationTable.translatedBodyPlainText,
-            sourceLanguageCode: conversationContentTranslationTable.sourceLanguageCode,
+            sourceLanguageCode:
+                conversationContentTranslationTable.sourceLanguageCode,
         })
         .from(conversationContentTranslationTable)
         .where(
@@ -1276,7 +1395,8 @@ async function fetchProjectActivities({
                 displayLanguage,
                 sourceLanguageCode: row.sourceLanguageCode,
                 targetLanguageCodes:
-                    targetLanguagesByConversationId.get(row.conversationId) ?? [],
+                    targetLanguagesByConversationId.get(row.conversationId) ??
+                    [],
                 fallbackContentLanguage: displayLanguage,
             });
         preferredLanguageByContentId.set(
@@ -1284,13 +1404,23 @@ async function fetchProjectActivities({
             preferredContentLanguage,
         );
     }
-    const [countsByConversationId, translationsByContentId] = await Promise.all([
-        fetchLatestConversationCounts({ db, conversationIds }),
-        fetchProjectActivityTranslations({ db, preferredLanguageByContentId }),
-    ]);
+    const [countsByConversationId, translationsByContentId] = await Promise.all(
+        [
+            fetchConversationDisplayCountsByConversationId({
+                db,
+                conversationIds,
+            }),
+            fetchProjectActivityTranslations({
+                db,
+                preferredLanguageByContentId,
+            }),
+        ],
+    );
     const activities: ProjectPageActivity[] = pageRows.map((row) => {
         const counts = countsByConversationId.get(row.conversationId);
-        const translation = translationsByContentId.get(row.conversationContentId);
+        const translation = translationsByContentId.get(
+            row.conversationContentId,
+        );
         const freshTranslation =
             translation !== undefined &&
             translationSourceMatchesCurrentSource({
@@ -1302,34 +1432,13 @@ async function fetchProjectActivities({
         const targetLanguageCode =
             preferredLanguageByContentId.get(row.conversationContentId) ??
             displayLanguage;
-        const activityBase = {
-            conversationType: row.conversationType,
-            isClosed: row.isClosed,
-            createdAt: row.createdAt,
-            isEdited: row.isEdited,
-            displayContent: toProjectActivityDisplayContent({
-                row,
-                translation: freshTranslation,
-                targetLanguageCode,
-                translationAllowed: row.isIndexed && row.dynamicTranslationEnabled,
-                displayLanguage,
-            }),
-            stats: {
-                opinionCount: counts?.opinionCount ?? 0,
-                participantCount: counts?.participantCount ?? 0,
-                voteCount: counts?.voteCount ?? 0,
-            },
-        };
-        return row.isIndexed
-            ? {
-                  ...activityBase,
-                  isIndexed: true,
-                  slugId: row.slugId,
-              }
-            : {
-                  ...activityBase,
-                  isIndexed: false,
-              };
+        return toProjectPageActivity({
+            row,
+            translation: freshTranslation,
+            targetLanguageCode,
+            displayLanguage,
+            counts,
+        });
     });
     const lastRow = pageRows.at(-1);
     return {
@@ -1372,34 +1481,31 @@ async function fetchProjectAggregateCounts({
 }: {
     db: PostgresJsDatabase;
     projectId: number;
-}): Promise<{ activityCount: number; participantCount: number; voteCount: number }> {
-    const latestSnapshot = db
-        .selectDistinctOn([conversationViewSnapshotTable.conversationId], {
-            conversationId: conversationViewSnapshotTable.conversationId,
-            participantCount: conversationViewSnapshotTable.participantCount,
-            voteCount: conversationViewSnapshotTable.voteCount,
-        })
-        .from(conversationViewSnapshotTable)
-        .where(isNotNull(conversationViewSnapshotTable.activatedAt))
-        .orderBy(
-            conversationViewSnapshotTable.conversationId,
-            desc(conversationViewSnapshotTable.createdAt),
-            desc(conversationViewSnapshotTable.id),
-        )
-        .as("latest_project_conversation_snapshot");
+}): Promise<{
+    activityCount: number;
+    participantCount: number;
+    voteCount: number;
+}> {
     const rows = await db
-        .select({
-            activityCount: count(conversationTable.id),
-            participantCount: sql<number>`COALESCE(SUM(${latestSnapshot.participantCount}), 0)::int`,
-            voteCount: sql<number>`COALESCE(SUM(${latestSnapshot.voteCount}), 0)::int`,
-        })
+        .select({ conversationId: conversationTable.id })
         .from(conversationTable)
-        .leftJoin(
-            latestSnapshot,
-            eq(latestSnapshot.conversationId, conversationTable.id),
-        )
         .where(getProjectPageConversationWhereClause({ projectId }));
-    return rows.at(0) ?? { activityCount: 0, participantCount: 0, voteCount: 0 };
+    const countsByConversationId =
+        await fetchConversationDisplayCountsByConversationId({
+            db,
+            conversationIds: rows.map((row) => row.conversationId),
+        });
+    let participantCount = 0;
+    let voteCount = 0;
+    for (const counts of countsByConversationId.values()) {
+        participantCount += counts.participantCount;
+        voteCount += counts.voteCount;
+    }
+    return {
+        activityCount: rows.length,
+        participantCount,
+        voteCount,
+    };
 }
 
 function resolveLocalizationRow({
@@ -1439,7 +1545,8 @@ async function fetchProjectAttributions({
             role: projectOrganizationAttributionTable.role,
             sortOrder: projectOrganizationAttributionTable.sortOrder,
             organizationId: organizationTable.id,
-            organizationDefaultLanguageCode: organizationTable.defaultLanguageCode,
+            organizationDefaultLanguageCode:
+                organizationTable.defaultLanguageCode,
             organizationDisplayName: organizationTable.displayName,
             organizationDescription: organizationTable.description,
             organizationWebsiteUrl: organizationTable.websiteUrl,
@@ -1453,7 +1560,8 @@ async function fetchProjectAttributions({
                 organizationLocalizationTable.description,
             organizationLocalizationWebsiteUrl:
                 organizationLocalizationTable.websiteUrl,
-            organizationLocalizationImagePath: organizationLocalizationTable.imagePath,
+            organizationLocalizationImagePath:
+                organizationLocalizationTable.imagePath,
             organizationLocalizationIsFullImagePath:
                 organizationLocalizationTable.isFullImagePath,
             externalOrganizationId: projectExternalOrganizationTable.id,
@@ -1481,13 +1589,22 @@ async function fetchProjectAttributions({
         .from(projectOrganizationAttributionTable)
         .leftJoin(
             organizationTable,
-            eq(organizationTable.id, projectOrganizationAttributionTable.organizationId),
+            eq(
+                organizationTable.id,
+                projectOrganizationAttributionTable.organizationId,
+            ),
         )
         .leftJoin(
             organizationLocalizationTable,
             and(
-                eq(organizationLocalizationTable.organizationId, organizationTable.id),
-                inArray(organizationLocalizationTable.languageCode, languageCandidates),
+                eq(
+                    organizationLocalizationTable.organizationId,
+                    organizationTable.id,
+                ),
+                inArray(
+                    organizationLocalizationTable.languageCode,
+                    languageCandidates,
+                ),
             ),
         )
         .leftJoin(
@@ -1517,9 +1634,12 @@ async function fetchProjectAttributions({
                 isNull(projectOrganizationAttributionTable.deletedAt),
             ),
         )
-        .orderBy(projectOrganizationAttributionTable.role, projectOrganizationAttributionTable.sortOrder);
+        .orderBy(
+            projectOrganizationAttributionTable.role,
+            projectOrganizationAttributionTable.sortOrder,
+        );
 
-    const grouped = new Map<string, (typeof rows)[number][] >();
+    const grouped = new Map<string, (typeof rows)[number][]>();
     for (const row of rows) {
         const id = row.organizationId ?? row.externalOrganizationId;
         if (id === null) {
@@ -1536,7 +1656,8 @@ async function fetchProjectAttributions({
             row.organizationId !== null
                 ? {
                       languageCode:
-                          row.organizationDefaultLanguageCode ?? defaultLanguageCode,
+                          row.organizationDefaultLanguageCode ??
+                          defaultLanguageCode,
                       displayName: row.organizationDisplayName ?? "",
                       description: row.organizationDescription ?? "",
                       websiteUrl: row.organizationWebsiteUrl,
@@ -1544,7 +1665,9 @@ async function fetchProjectAttributions({
                       isFullImagePath: row.organizationIsFullImagePath ?? false,
                   }
                 : {
-                      languageCode: row.externalDefaultLanguageCode ?? defaultLanguageCode,
+                      languageCode:
+                          row.externalDefaultLanguageCode ??
+                          defaultLanguageCode,
                       displayName: row.externalDisplayName ?? "",
                       description: row.externalDescription ?? "",
                       websiteUrl: row.externalWebsiteUrl,
@@ -1554,19 +1677,23 @@ async function fetchProjectAttributions({
         const additionalRows: OrganizationLocalizationRow[] = groupRows.flatMap(
             (candidate) => {
                 if (row.organizationId !== null) {
-                    return candidate.organizationLocalizationLanguageCode === null
+                    return candidate.organizationLocalizationLanguageCode ===
+                        null
                         ? []
                         : [
                               {
                                   languageCode:
                                       candidate.organizationLocalizationLanguageCode,
                                   displayName:
-                                      candidate.organizationLocalizationDisplayName ?? "",
+                                      candidate.organizationLocalizationDisplayName ??
+                                      "",
                                   description:
-                                      candidate.organizationLocalizationDescription ?? "",
+                                      candidate.organizationLocalizationDescription ??
+                                      "",
                                   websiteUrl:
                                       candidate.organizationLocalizationWebsiteUrl,
-                                  imagePath: candidate.organizationLocalizationImagePath,
+                                  imagePath:
+                                      candidate.organizationLocalizationImagePath,
                                   isFullImagePath:
                                       candidate.organizationLocalizationIsFullImagePath ??
                                       false,
@@ -1577,15 +1704,21 @@ async function fetchProjectAttributions({
                     ? []
                     : [
                           {
-                              languageCode: candidate.externalLocalizationLanguageCode,
+                              languageCode:
+                                  candidate.externalLocalizationLanguageCode,
                               displayName:
-                                  candidate.externalLocalizationDisplayName ?? "",
+                                  candidate.externalLocalizationDisplayName ??
+                                  "",
                               description:
-                                  candidate.externalLocalizationDescription ?? "",
-                              websiteUrl: candidate.externalLocalizationWebsiteUrl,
-                              imagePath: candidate.externalLocalizationImagePath,
+                                  candidate.externalLocalizationDescription ??
+                                  "",
+                              websiteUrl:
+                                  candidate.externalLocalizationWebsiteUrl,
+                              imagePath:
+                                  candidate.externalLocalizationImagePath,
                               isFullImagePath:
-                                  candidate.externalLocalizationIsFullImagePath ?? false,
+                                  candidate.externalLocalizationIsFullImagePath ??
+                                  false,
                           },
                       ];
             },
@@ -1599,7 +1732,7 @@ async function fetchProjectAttributions({
             role: row.role,
             displayName: resolved.displayName,
             description: optionalText(resolved.description),
-            websiteUrl: optionalUrl(resolved.websiteUrl),
+            websiteUrl: optionalHttpsUrl(resolved.websiteUrl),
             initials: getInitials(resolved.displayName),
             accentColor: getAttributionAccentColor({ role: row.role }),
             imageUrl: toImageUrl({
@@ -1637,7 +1770,8 @@ async function fetchProjectContact({
             websiteUrl: projectContactTable.websiteUrl,
             imagePath: projectContactTable.imagePath,
             isFullImagePath: projectContactTable.isFullImagePath,
-            organizationDefaultLanguageCode: organizationTable.defaultLanguageCode,
+            organizationDefaultLanguageCode:
+                organizationTable.defaultLanguageCode,
             organizationName: organizationTable.displayName,
             organizationDescription: organizationTable.description,
             organizationWebsiteUrl: organizationTable.websiteUrl,
@@ -1651,7 +1785,8 @@ async function fetchProjectContact({
                 organizationLocalizationTable.description,
             organizationLocalizationWebsiteUrl:
                 organizationLocalizationTable.websiteUrl,
-            organizationLocalizationImagePath: organizationLocalizationTable.imagePath,
+            organizationLocalizationImagePath:
+                organizationLocalizationTable.imagePath,
             organizationLocalizationIsFullImagePath:
                 organizationLocalizationTable.isFullImagePath,
             externalDefaultLanguageCode:
@@ -1683,8 +1818,14 @@ async function fetchProjectContact({
         .leftJoin(
             organizationLocalizationTable,
             and(
-                eq(organizationLocalizationTable.organizationId, organizationTable.id),
-                inArray(organizationLocalizationTable.languageCode, languageCandidates),
+                eq(
+                    organizationLocalizationTable.organizationId,
+                    organizationTable.id,
+                ),
+                inArray(
+                    organizationLocalizationTable.languageCode,
+                    languageCandidates,
+                ),
             ),
         )
         .leftJoin(
@@ -1721,7 +1862,8 @@ async function fetchProjectContact({
     const affiliationName = (() => {
         if (row.organizationName !== null) {
             const defaultRow: OrganizationLocalizationRow = {
-                languageCode: row.organizationDefaultLanguageCode ?? defaultLanguageCode,
+                languageCode:
+                    row.organizationDefaultLanguageCode ?? defaultLanguageCode,
                 displayName: row.organizationName,
                 description: row.organizationDescription ?? "",
                 websiteUrl: row.organizationWebsiteUrl,
@@ -1737,12 +1879,15 @@ async function fetchProjectContact({
                                   languageCode:
                                       candidate.organizationLocalizationLanguageCode,
                                   displayName:
-                                      candidate.organizationLocalizationDisplayName ?? "",
+                                      candidate.organizationLocalizationDisplayName ??
+                                      "",
                                   description:
-                                      candidate.organizationLocalizationDescription ?? "",
+                                      candidate.organizationLocalizationDescription ??
+                                      "",
                                   websiteUrl:
                                       candidate.organizationLocalizationWebsiteUrl,
-                                  imagePath: candidate.organizationLocalizationImagePath,
+                                  imagePath:
+                                      candidate.organizationLocalizationImagePath,
                                   isFullImagePath:
                                       candidate.organizationLocalizationIsFullImagePath ??
                                       false,
@@ -1758,7 +1903,8 @@ async function fetchProjectContact({
 
         if (row.externalName !== null) {
             const defaultRow: OrganizationLocalizationRow = {
-                languageCode: row.externalDefaultLanguageCode ?? defaultLanguageCode,
+                languageCode:
+                    row.externalDefaultLanguageCode ?? defaultLanguageCode,
                 displayName: row.externalName,
                 description: row.externalDescription ?? "",
                 websiteUrl: row.externalWebsiteUrl,
@@ -1774,13 +1920,18 @@ async function fetchProjectContact({
                                   languageCode:
                                       candidate.externalLocalizationLanguageCode,
                                   displayName:
-                                      candidate.externalLocalizationDisplayName ?? "",
+                                      candidate.externalLocalizationDisplayName ??
+                                      "",
                                   description:
-                                      candidate.externalLocalizationDescription ?? "",
-                                  websiteUrl: candidate.externalLocalizationWebsiteUrl,
-                                  imagePath: candidate.externalLocalizationImagePath,
+                                      candidate.externalLocalizationDescription ??
+                                      "",
+                                  websiteUrl:
+                                      candidate.externalLocalizationWebsiteUrl,
+                                  imagePath:
+                                      candidate.externalLocalizationImagePath,
                                   isFullImagePath:
-                                      candidate.externalLocalizationIsFullImagePath ?? false,
+                                      candidate.externalLocalizationIsFullImagePath ??
+                                      false,
                               },
                           ],
             );
@@ -1799,7 +1950,7 @@ async function fetchProjectContact({
         roleLabel: optionalText(row.roleLabel),
         affiliationName,
         email: optionalText(row.email),
-        websiteUrl: optionalUrl(row.websiteUrl),
+        websiteUrl: optionalHttpsUrl(row.websiteUrl),
         imageUrl: toImageUrl({
             imagePath: row.imagePath,
             isFullImagePath: row.isFullImagePath,
@@ -1875,6 +2026,7 @@ async function buildProjectShellPayload({
             displayLanguage: currentDisplayLanguage,
             spokenLanguages: [],
         }),
+        dynamicTranslationEnabled: project.dynamicTranslationEnabled,
         bannerVariant: "blue",
         bannerImageUrl,
         participantCount: aggregateCounts.participantCount,
@@ -1883,7 +2035,10 @@ async function buildProjectShellPayload({
         attributions,
         contact,
     };
-    const supportedLanguageCodes = [defaultLanguageCode, ...additionalLanguageCodes];
+    const supportedLanguageCodes = [
+        defaultLanguageCode,
+        ...additionalLanguageCodes,
+    ];
     return {
         project: projectPayload,
         languageOptions: buildProjectPageLanguageOptions({

@@ -12,7 +12,6 @@ import {
   areConversationMultilingualSettingsEqual,
   createEmptyDraft,
 } from "src/composables/conversation/draft/conversationDraft.utils";
-import type { OrganizationProperties } from "src/shared/types/zod";
 import {
   checkFeatureAccess,
   DEFAULT_FEATURE_ALLOWED_ORGS,
@@ -104,8 +103,7 @@ export const useNewPostDraftsStore = defineStore("newPostDrafts", () => {
     // Check basic content changes
     const hasContentChanges =
       current.title !== emptyDraft.title ||
-      current.content !== emptyDraft.content ||
-      current.contentPlainText !== emptyDraft.contentPlainText;
+      current.content !== emptyDraft.content;
 
     const hasMultilingualSettingChanges =
       !areConversationMultilingualSettingsEqual({
@@ -193,82 +191,10 @@ export const useNewPostDraftsStore = defineStore("newPostDrafts", () => {
   }
 
   /**
-   * Adds a new initial opinion to seed the conversation
-   */
-  function addInitialOpinion(opinion: string): void {
-    if (opinion.trim() !== "") {
-      conversationDraft.value.seedOpinions.push(opinion.trim());
-    }
-  }
-
-  /**
    * Toggles the privacy mode and manages related settings
    */
   function togglePrivacy(isPrivate: boolean): void {
     conversationDraft.value.isPrivate = isPrivate;
-  }
-
-  // ============================================================================
-  // Organization Management Functions
-  // ============================================================================
-
-  /**
-   * Sets posting as an organization with the specified name
-   */
-  function setPostAsOrganization(organizationName: string): void {
-    conversationDraft.value.postAs.postAsOrganization = true;
-    conversationDraft.value.postAs.organizationName = organizationName;
-  }
-
-  function getOrganizationIdentifier(organization: OrganizationProperties): string {
-    return organization.slug ?? organization.name;
-  }
-
-  /**
-   * Disables posting as an organization and switches to personal posting
-   */
-  function disablePostAsOrganization(): void {
-    conversationDraft.value.postAs.postAsOrganization = false;
-    conversationDraft.value.postAs.organizationName = "";
-    conversationDraft.value.selectedProjectSlug = undefined;
-    conversationDraft.value.inheritProjectLanguages = false;
-    if (!isImportAllowedForCurrentActor()) {
-      clearImportDraft();
-    }
-  }
-
-  /**
-   * Validates that the selected organization still exists in the user's organization list
-   * If the organization doesn't exist, resets the draft to prevent invalid state
-   */
-  function validateSelectedOrganization(
-    userOrganizationList: OrganizationProperties[]
-  ): void {
-    const draft = conversationDraft.value;
-
-    // Only validate if posting as organization
-    if (!draft.postAs.postAsOrganization || !draft.postAs.organizationName) {
-      return;
-    }
-
-    const selectedOrganization = userOrganizationList.find(
-      (org) =>
-        getOrganizationIdentifier(org) === draft.postAs.organizationName ||
-        org.name === draft.postAs.organizationName
-    );
-
-    if (selectedOrganization === undefined) {
-      console.warn(
-        `Selected organization "${draft.postAs.organizationName}" no longer exists in user's organization list. Resetting draft.`
-      );
-      resetDraft();
-      return;
-    }
-
-    const organizationIdentifier = getOrganizationIdentifier(selectedOrganization);
-    if (draft.postAs.organizationName !== organizationIdentifier) {
-      draft.postAs.organizationName = organizationIdentifier;
-    }
   }
 
   // ============================================================================
@@ -423,13 +349,7 @@ export const useNewPostDraftsStore = defineStore("newPostDrafts", () => {
 
     // Draft management functions
     resetDraft,
-    addInitialOpinion,
     togglePrivacy,
-
-    // Organization management functions
-    setPostAsOrganization,
-    disablePostAsOrganization,
-    validateSelectedOrganization,
 
     // Import type management functions
     setImportType,

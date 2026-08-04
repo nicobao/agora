@@ -19,7 +19,7 @@
             aria-hidden="true"
           />
           <span class="project-conversation-header-card__breadcrumb-current">
-            {{ t({ key: "conversationType" }) }}
+            {{ conversationTypeLabel }}
           </span>
           <span class="project-conversation-header-card__breadcrumb-separator"
             >•</span
@@ -171,12 +171,14 @@
     </div>
 
     <q-dialog v-model="showMobileProjectDetails" position="bottom">
-      <ZKBottomDialogContainer :title="t({ key: 'behindThisTitle' })">
+      <ZKBottomDialogContainer
+        :title="t({ key: 'projectDetailsAriaLabel' })"
+        show-close-button
+      >
         <ProjectDetailsAside
           :attributions="project.attributions"
           :contact="project.contact"
           :language-code="selectedLanguage"
-          :show-attribution-title="false"
         />
       </ZKBottomDialogContainer>
     </q-dialog>
@@ -228,6 +230,7 @@ interface ProjectConversationStatusBadge {
 
 const props = defineProps<{
   project: ProjectPageData;
+  projectTitle: string;
   conversationData: ExtendedConversation | ExtendedConversationDisplayData;
   initialDisplayContent?: ConversationContentFetchResponse;
   selectedLanguage: SupportedDisplayLanguageCodes;
@@ -247,11 +250,6 @@ const userIdentityText = computed<UserIdentityCardTranslations>(
 const projectRoute = computed<RouteLocationRaw>(() => ({
   path: `/project/${props.project.slug}`,
 }));
-const projectTitle = computed(() =>
-  props.project.displayContent.status === "available"
-    ? props.project.displayContent.content.title
-    : ""
-);
 const projectTextDirection = computed(() =>
   getLanguageTextDirection(props.selectedLanguage)
 );
@@ -260,10 +258,17 @@ const breadcrumbIcon = computed(() =>
     ? "mdi-chevron-left"
     : "mdi-chevron-right"
 );
+const conversationTypeLabel = computed(() =>
+  props.conversationData.metadata.conversationType === "ranking"
+    ? t({ key: "voteType" })
+    : t({ key: "conversationType" })
+);
 const extendedConversation = computed(() => props.conversationData);
 const initialDisplayContent = computed(() => props.initialDisplayContent);
 const fallbackPayload = computed(() =>
-  "payload" in props.conversationData ? props.conversationData.payload : undefined
+  "payload" in props.conversationData
+    ? props.conversationData.payload
+    : undefined
 );
 const {
   displayedTitle,

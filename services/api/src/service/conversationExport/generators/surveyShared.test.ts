@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { htmlToCountedText } from "@/shared/shared.js";
 import { createExportParticipantMap } from "./participantMap.js";
 import {
-    buildSurveyAggregateRows,
+    buildSurveyAggregateResultRows,
     buildSurveyCompletionCounts,
     buildSurveyParticipantResponseRows,
     buildSurveyQuestionOptionRows,
@@ -15,6 +16,20 @@ import {
     type StoredSurveyAnswer,
     type SurveyParticipantState,
 } from "@/service/survey.js";
+
+function buildSurveyAggregateRows({
+    context,
+    includeSuppression,
+}: {
+    context: SurveyExportContext;
+    includeSuppression: boolean;
+}) {
+    const rows = buildSurveyAggregateResultRows({
+        context,
+        includeFullRows: !includeSuppression,
+    });
+    return includeSuppression ? rows.suppressedRows : rows.fullRows;
+}
 
 const surveyConfig: ActiveSurveyConfigRecord = {
     id: 1,
@@ -135,7 +150,7 @@ function createCompleteMonoChoiceState({
             answerId: responseId * 10 + 2,
             answeredQuestionSemanticVersion: 1,
             textValueHtml: freeTextHtml,
-            textValuePlainText: freeTextHtml,
+            textValuePlainText: htmlToCountedText(freeTextHtml),
             optionSlugIds: [],
         });
     }

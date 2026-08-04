@@ -182,6 +182,10 @@
               outlined
               type="url"
               :label="optionalLabel(t('externalWebsiteLabel'))"
+              :hint="t('websiteUrlHint')"
+              :error="!isExternalWebsiteUrlValid"
+              :error-message="t('websiteUrlError')"
+              autocomplete="url"
             />
             <q-input
               v-model="externalImagePathInput"
@@ -272,6 +276,10 @@
             outlined
             type="url"
             :label="contactChannelLabel(t('contactWebsiteLabel'))"
+            :hint="t('websiteUrlHint')"
+            :error="!isContactWebsiteUrlValid"
+            :error-message="t('websiteUrlError')"
+            autocomplete="url"
           />
           <q-input
             v-model="contactImagePathInput"
@@ -516,6 +524,10 @@
                 outlined
                 type="url"
                 :label="optionalLabel(t('externalWebsiteLabel'))"
+                :hint="t('websiteUrlHint')"
+                :error="!isExternalWebsiteUrlValid"
+                :error-message="t('websiteUrlError')"
+                autocomplete="url"
               />
               <q-input
                 v-model="externalImagePathInput"
@@ -619,6 +631,10 @@
               outlined
               type="url"
               :label="manageContactChannelLabel(t('contactWebsiteLabel'))"
+              :hint="t('websiteUrlHint')"
+              :error="!isManageContactWebsiteUrlValid"
+              :error-message="t('websiteUrlError')"
+              autocomplete="url"
             />
             <q-input
               v-model="manageContactImagePathInput"
@@ -787,6 +803,7 @@ import { useLanguageStore } from "src/stores/language";
 import { useBackendAdministratorOrganizationApi } from "src/utils/api/administrator/organization";
 import { useBackendAdministratorProjectApi } from "src/utils/api/administrator/project";
 import { useNotify } from "src/utils/ui/notify";
+import { isOptionalHttpsUrl } from "src/utils/url";
 import {
   computed,
   onMounted,
@@ -820,8 +837,9 @@ type ExternalAttribution = Extract<
   CreateProjectAttributionRequest,
   { source: "external" }
 >;
-type ProjectContentLocalization =
+type ProjectContentLocalizationRequest =
   CreateProjectRequest["contentLocalizations"][number];
+type ProjectContentLocalization = AdminProject["contentLocalizations"][number];
 
 const noMachineContentLocalizations: ProjectContentLocalization[] = [];
 
@@ -1088,6 +1106,8 @@ const externalLocalizationEditorLabels = computed(() => ({
   nameLabel: requiredLabel(t("externalNameLabel")),
   descriptionLabel: optionalLabel(t("externalDescriptionLabel")),
   websiteLabel: optionalLabel(t("externalWebsiteLabel")),
+  websiteHint: t("websiteUrlHint"),
+  websiteError: t("websiteUrlError"),
   imagePathLabel: optionalLabel(t("externalImagePathLabel")),
   imageIsFullPathLabel: t("externalImageIsFullPathLabel"),
   addLanguageButton: t("addLanguageButton"),
@@ -1129,9 +1149,21 @@ const canAddAttribution = computed(() => {
 
   return (
     externalDisplayName.value.trim() !== "" &&
-    isOptionalUrlValid(externalWebsiteUrl.value)
+    isOptionalHttpsUrl(externalWebsiteUrl.value)
   );
 });
+
+const isExternalWebsiteUrlValid = computed(() =>
+  isOptionalHttpsUrl(externalWebsiteUrl.value)
+);
+
+const isContactWebsiteUrlValid = computed(() =>
+  isOptionalHttpsUrl(contactWebsite.value)
+);
+
+const isManageContactWebsiteUrlValid = computed(() =>
+  isOptionalHttpsUrl(manageContactWebsite.value)
+);
 
 const canAddManageAttribution = computed(() => {
   if (attributionSource.value === "organization") {
@@ -1146,7 +1178,7 @@ const canAddManageAttribution = computed(() => {
 
   return (
     externalDisplayName.value.trim() !== "" &&
-    isOptionalUrlValid(externalWebsiteUrl.value)
+    isOptionalHttpsUrl(externalWebsiteUrl.value)
   );
 });
 
@@ -1192,7 +1224,7 @@ const hasValidContact = computed(() => {
   return (
     contactFirstName.value.trim() !== "" &&
     (trimmedEmail === "" || zodEmail.safeParse(trimmedEmail).success) &&
-    isOptionalUrlValid(trimmedWebsite) &&
+    isOptionalHttpsUrl(trimmedWebsite) &&
     hasContactChannelInput.value
   );
 });
@@ -1207,7 +1239,7 @@ const hasValidManageContact = computed(() => {
   return (
     manageContactFirstName.value.trim() !== "" &&
     (trimmedEmail === "" || zodEmail.safeParse(trimmedEmail).success) &&
-    isOptionalUrlValid(trimmedWebsite) &&
+    isOptionalHttpsUrl(trimmedWebsite) &&
     hasManageContactChannelInput.value
   );
 });
@@ -1540,20 +1572,6 @@ function optionalStringSelectModel(
   });
 }
 
-function isOptionalUrlValid(value: string): boolean {
-  const trimmed = value.trim();
-  if (trimmed === "") {
-    return true;
-  }
-
-  try {
-    const url = new URL(trimmed);
-    return url.protocol === "http:" || url.protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
 function optionalRichTextHtml({
   html,
   plainText,
@@ -1566,6 +1584,19 @@ function optionalRichTextHtml({
   }
 
   return optionalString(html);
+}
+
+function buildProjectContentLocalizationRequest(
+  localization: ProjectContentLocalization
+): ProjectContentLocalizationRequest {
+  return {
+    languageCode: localization.languageCode,
+    projectTitle: localization.projectTitle,
+    subtitle: localization.subtitle,
+    body: localization.body,
+    bannerPath: localization.bannerPath,
+    bannerIsFullPath: localization.bannerIsFullPath,
+  };
 }
 
 function getRoleLabel(role: AttributionRole): string {
@@ -1902,7 +1933,6 @@ function populateExternalAttributionForm({
 }
 
 function buildCreateRequest(): CreateProjectRequest {
-  const bodyPlainText = optionalString(projectBodyPlainText.value);
   return {
     projectSlug: projectSlug.value.trim(),
     projectTitle: projectTitle.value.trim(),
@@ -1912,10 +1942,11 @@ function buildCreateRequest(): CreateProjectRequest {
       html: projectBody.value,
       plainText: projectBodyPlainText.value,
     }),
-    bodyPlainText,
     bannerPath: optionalString(bannerPath.value),
     bannerIsFullPath: bannerIsFullPath.value,
-    contentLocalizations: createContentLocalizations.value,
+    contentLocalizations: createContentLocalizations.value.map(
+      buildProjectContentLocalizationRequest
+    ),
     languageSettings: {
       targetLanguageCodes:
         createMultilingualSetting.value.additionalLanguageCodes,
@@ -1939,7 +1970,6 @@ function buildCreateRequest(): CreateProjectRequest {
 }
 
 function buildUpdateRequest(project: AdminProject): UpdateProjectRequest {
-  const bodyPlainText = optionalString(manageProjectBodyPlainText.value);
   return {
     currentProjectSlug: project.projectSlug,
     projectSlug: project.projectSlug,
@@ -1950,10 +1980,11 @@ function buildUpdateRequest(project: AdminProject): UpdateProjectRequest {
       html: manageProjectBody.value,
       plainText: manageProjectBodyPlainText.value,
     }),
-    bodyPlainText,
     bannerPath: optionalString(manageBannerPath.value),
     bannerIsFullPath: manageBannerIsFullPath.value,
-    contentLocalizations: manageContentLocalizations.value,
+    contentLocalizations: manageContentLocalizations.value.map(
+      buildProjectContentLocalizationRequest
+    ),
     languageSettings: {
       targetLanguageCodes:
         manageMultilingualSetting.value.additionalLanguageCodes,

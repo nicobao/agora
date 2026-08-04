@@ -17,12 +17,13 @@ import {
     markRankingScoringDirty,
     normalizeProviderRankingItemContent,
 } from "@/service/rankingItem.js";
-import { computeItemSnapshot } from "@/service/maxdiff.js";
-import { log } from "@/app.js";
 import {
-    processUserGeneratedHtml,
-    htmlToCountedText,
-} from "@/shared-app-api/html.js";
+    computeItemSnapshot,
+    lockRankingScoringConfig,
+} from "@/service/maxdiff.js";
+import { log } from "@/app.js";
+import { processUserGeneratedHtml } from "@/shared-app-api/html.js";
+import { htmlToCountedTextWithWarning } from "@/service/richText.js";
 import { marked } from "marked";
 import type { GitHubClient, GitHubIssue, SyncResult } from "./index.js";
 import { requireProjectCapability } from "@/service/projectAccess.js";
@@ -378,6 +379,7 @@ async function upsertItemFromGitHubIssue({
 
             // If issue is already closed, transition to correct lifecycle
             if (newLifecycle !== "active") {
+                await lockRankingScoringConfig({ db: tx, conversationId });
                 const snapshot = await computeItemSnapshot({
                     db: tx,
                     conversationId,
@@ -490,6 +492,7 @@ async function upsertItemFromGitHubIssue({
 
             if (wasActive && isDeactivating) {
                 // Snapshot before deactivating
+                await lockRankingScoringConfig({ db: tx, conversationId });
                 const snapshot = await computeItemSnapshot({
                     db: tx,
                     conversationId,
@@ -581,40 +584,44 @@ async function deactivateItemByExternalId({
 
     const itemId = rows[0].rankingItemId;
 
-    const itemRows = await db
-        .select({
-            slugId: rankingItemTable.slugId,
-            lifecycleStatus: rankingItemTable.lifecycleStatus,
-        })
-        .from(rankingItemTable)
-        .where(eq(rankingItemTable.id, itemId));
-
-    if (itemRows.length === 0) return;
-    const item = itemRows[0];
-
-    if (
-        item.lifecycleStatus === "completed" ||
-        item.lifecycleStatus === "canceled"
-    ) {
-        return; // already deactivated
-    }
-
-    const snapshot = await computeItemSnapshot({
-        db,
-        conversationId,
-        itemSlugId: item.slugId,
+    const changed = await db.transaction(async (tx) => {
+        await lockRankingScoringConfig({ db: tx, conversationId });
+        const itemRows = await tx
+            .select({
+                slugId: rankingItemTable.slugId,
+                lifecycleStatus: rankingItemTable.lifecycleStatus,
+            })
+            .from(rankingItemTable)
+            .where(eq(rankingItemTable.id, itemId))
+            .for("update");
+        const item = itemRows.at(0);
+        if (
+            item === undefined ||
+            item.lifecycleStatus === "completed" ||
+            item.lifecycleStatus === "canceled"
+        ) {
+            return false;
+        }
+        const snapshot = await computeItemSnapshot({
+            db: tx,
+            conversationId,
+            itemSlugId: item.slugId,
+        });
+        await tx
+            .update(rankingItemTable)
+            .set({
+                lifecycleStatus: "canceled",
+                snapshotScore: snapshot.snapshotScore,
+                snapshotRank: snapshot.snapshotRank,
+                snapshotParticipantCount: snapshot.snapshotParticipantCount,
+                updatedAt: new Date(),
+            })
+            .where(eq(rankingItemTable.id, itemId));
+        return true;
     });
-
-    await db
-        .update(rankingItemTable)
-        .set({
-            lifecycleStatus: "canceled",
-            snapshotScore: snapshot.snapshotScore,
-            snapshotRank: snapshot.snapshotRank,
-            snapshotParticipantCount: snapshot.snapshotParticipantCount,
-            updatedAt: new Date(),
-        })
-        .where(eq(rankingItemTable.id, itemId));
+    if (!changed) {
+        return;
+    }
 
     log.info(`[GitHub] Deactivated item from ${externalId} (label removed)`);
 
@@ -853,7 +860,10 @@ export function convertMarkdownToHtml({
     let html = processUserGeneratedHtml(rawHtml, true, "output");
 
     // Verify text length after conversion
-    const textLength = htmlToCountedText(html).length;
+    const textLength = htmlToCountedTextWithWarning({
+        html,
+        context: "GitHub ranking body truncation",
+    }).length;
     if (textLength > MAX_TEXT_LENGTH) {
         // Re-truncate source more aggressively and retry
         const ratio = MAX_TEXT_LENGTH / textLength;

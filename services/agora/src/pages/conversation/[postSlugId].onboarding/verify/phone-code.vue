@@ -18,10 +18,8 @@
           :current-step="2.5"
           :total-steps="surveyStepTotal"
           :enable-next-button="phoneOtpFormRef?.isCodeComplete?.() ?? false"
-          :show-next-button="true"
-          :show-loading-button="
-            phoneOtpFormRef?.isSubmitButtonLoading?.value ?? false
-          "
+          :show-next-button="phoneOtpFormRef?.isAvailable ?? false"
+          :show-loading-button="phoneOtpFormRef?.isSubmitButtonLoading ?? false"
         >
           <template #header>
             <InfoHeader
@@ -34,6 +32,7 @@
           <template #body>
             <PhoneOtpForm
               ref="phoneOtpFormRef"
+              :purpose="phoneAuthPurpose"
               @change-identifier="changePhoneNumber"
             />
           </template>
@@ -58,6 +57,7 @@ import {
   type VerifyPhoneCodeTranslations,
   verifyPhoneCodeTranslations,
 } from "src/pages/verify/phone-code/index.i18n";
+import { useAuthenticationStore } from "src/stores/authentication";
 import { useConversationOnboardingStore } from "src/stores/conversationOnboarding";
 import { onboardingFlowStore } from "src/stores/onboarding/flow";
 import { getConversationSurveyVerifyPhonePath } from "src/utils/survey/navigation";
@@ -69,9 +69,14 @@ const { t } = useComponentI18n<VerifyPhoneCodeTranslations>(
 );
 
 const router = useRouter();
-const { routeConversationSlugId, routeContext } = useConversationOnboardingRoute();
+const { routeConversationSlugId, routeContext } =
+  useConversationOnboardingRoute();
 const conversationOnboardingStore = useConversationOnboardingStore();
+const { isAuthInitialized, isLoggedIn } = storeToRefs(useAuthenticationStore());
 const { credentialUpgradeTarget } = storeToRefs(onboardingFlowStore());
+const phoneAuthPurpose = computed(() =>
+  !isAuthInitialized.value || isLoggedIn.value ? "credential" : "login"
+);
 const { exitToConversation } = useConversationOnboardingExit();
 
 if (
@@ -84,8 +89,12 @@ if (
   });
 }
 
-const { conversationSlugId, conversationData, conversationDisplayContent, surveyForm } =
-  useConversationSurveyState({ conversationSlugId: routeConversationSlugId });
+const {
+  conversationSlugId,
+  conversationData,
+  conversationDisplayContent,
+  surveyForm,
+} = useConversationSurveyState({ conversationSlugId: routeConversationSlugId });
 
 const surveyStepTotal = computed(() => {
   const questionCount = surveyForm.value?.questions.length ?? 0;
@@ -95,7 +104,8 @@ const surveyStepTotal = computed(() => {
 
 const phoneOtpFormRef = ref<{
   nextButtonClicked: () => void;
-  isSubmitButtonLoading: { value: boolean };
+  isSubmitButtonLoading: boolean;
+  isAvailable: boolean;
   isCodeComplete: () => boolean;
 } | null>(null);
 

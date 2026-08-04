@@ -33,6 +33,7 @@ export interface ProjectPageTranslations {
   languageSearchPlaceholder: string;
   languageNoResults: string;
   languageSupportedByProject: string;
+  languageSupportedByConversation: string;
   bannerImageAlt: string;
   liveConsultation: string;
   closedConsultation: string;
@@ -43,7 +44,6 @@ export interface ProjectPageTranslations {
   emptyActivities: string;
   allActivitiesLoaded: string;
   projectDetailsAriaLabel: string;
-  behindThisTitle: string;
   sponsorsTitle: string;
   projectOwnersTitle: string;
   partnersTitle: string;
@@ -82,6 +82,7 @@ export const projectPageTranslations: Readonly<
     languageSearchPlaceholder: "Search languages",
     languageNoResults: "No matching languages",
     languageSupportedByProject: "Supported by this project",
+    languageSupportedByConversation: "Supported by this conversation",
     bannerImageAlt: "{title} banner",
     liveConsultation: "Live consultation",
     closedConsultation: "Closed consultation",
@@ -92,7 +93,6 @@ export const projectPageTranslations: Readonly<
     emptyActivities: "No activities have been published yet.",
     allActivitiesLoaded: "All activities loaded",
     projectDetailsAriaLabel: "Project details",
-    behindThisTitle: "Who is behind this",
     sponsorsTitle: "Sponsors",
     projectOwnersTitle: "Project Owners",
     partnersTitle: "Partners",
@@ -128,6 +128,7 @@ export const projectPageTranslations: Readonly<
     languageSearchPlaceholder: "Buscar idiomas",
     languageNoResults: "No hay idiomas coincidentes",
     languageSupportedByProject: "Compatible con este proyecto",
+    languageSupportedByConversation: "Compatible con esta conversación",
     bannerImageAlt: "Banner de {title}",
     liveConsultation: "Consulta en directo",
     closedConsultation: "Consulta cerrada",
@@ -138,7 +139,6 @@ export const projectPageTranslations: Readonly<
     emptyActivities: "Todavía no se han publicado actividades.",
     allActivitiesLoaded: "Todas las actividades cargadas",
     projectDetailsAriaLabel: "Detalles del proyecto",
-    behindThisTitle: "Quién está detrás de esto",
     sponsorsTitle: "Patrocinadores",
     projectOwnersTitle: "Responsables del proyecto",
     partnersTitle: "Socios",
@@ -174,6 +174,7 @@ export const projectPageTranslations: Readonly<
     languageSearchPlaceholder: "Rechercher des langues",
     languageNoResults: "Aucune langue correspondante",
     languageSupportedByProject: "Prise en charge par ce projet",
+    languageSupportedByConversation: "Prise en charge par cette conversation",
     bannerImageAlt: "Bannière de {title}",
     liveConsultation: "Consultation en direct",
     closedConsultation: "Consultation terminée",
@@ -184,7 +185,6 @@ export const projectPageTranslations: Readonly<
     emptyActivities: "Aucune activité n'a encore été publiée.",
     allActivitiesLoaded: "Toutes les activités sont chargées",
     projectDetailsAriaLabel: "Détails du projet",
-    behindThisTitle: "Qui est derrière ce projet",
     sponsorsTitle: "Financeurs",
     projectOwnersTitle: "Porteurs du projet",
     partnersTitle: "Partenaires",
@@ -220,6 +220,7 @@ export const projectPageTranslations: Readonly<
     languageSearchPlaceholder: "搜索语言",
     languageNoResults: "没有匹配的语言",
     languageSupportedByProject: "此项目支持",
+    languageSupportedByConversation: "此对话支持",
     bannerImageAlt: "{title} 横幅",
     liveConsultation: "进行中的咨询",
     closedConsultation: "已结束的咨询",
@@ -230,7 +231,6 @@ export const projectPageTranslations: Readonly<
     emptyActivities: "尚未发布任何活动。",
     allActivitiesLoaded: "所有活动已加载",
     projectDetailsAriaLabel: "项目详情",
-    behindThisTitle: "谁在支持这个项目",
     sponsorsTitle: "赞助方",
     projectOwnersTitle: "项目负责人",
     partnersTitle: "合作伙伴",
@@ -265,6 +265,7 @@ export const projectPageTranslations: Readonly<
     languageSearchPlaceholder: "搜尋語言",
     languageNoResults: "沒有相符的語言",
     languageSupportedByProject: "此專案支援",
+    languageSupportedByConversation: "此對話支援",
     bannerImageAlt: "{title} 橫幅",
     liveConsultation: "進行中的諮詢",
     closedConsultation: "已結束的諮詢",
@@ -275,7 +276,6 @@ export const projectPageTranslations: Readonly<
     emptyActivities: "尚未發布任何活動。",
     allActivitiesLoaded: "所有活動已載入",
     projectDetailsAriaLabel: "專案詳情",
-    behindThisTitle: "誰在支持這個專案",
     sponsorsTitle: "贊助方",
     projectOwnersTitle: "專案負責人",
     partnersTitle: "合作夥伴",
@@ -310,6 +310,7 @@ export const projectPageTranslations: Readonly<
     languageSearchPlaceholder: "言語を検索",
     languageNoResults: "一致する言語はありません",
     languageSupportedByProject: "このプロジェクトで対応",
+    languageSupportedByConversation: "この会話で対応",
     bannerImageAlt: "{title} のバナー",
     liveConsultation: "進行中の協議",
     closedConsultation: "終了した協議",
@@ -320,7 +321,6 @@ export const projectPageTranslations: Readonly<
     emptyActivities: "まだアクティビティは公開されていません。",
     allActivitiesLoaded: "すべてのアクティビティを読み込みました",
     projectDetailsAriaLabel: "プロジェクト詳細",
-    behindThisTitle: "このプロジェクトの運営者",
     sponsorsTitle: "スポンサー",
     projectOwnersTitle: "プロジェクトオーナー",
     partnersTitle: "パートナー",
@@ -356,6 +356,7 @@ export const projectPageTranslations: Readonly<
     languageSearchPlaceholder: "البحث عن اللغات",
     languageNoResults: "لا توجد لغات مطابقة",
     languageSupportedByProject: "مدعومة من هذا المشروع",
+    languageSupportedByConversation: "مدعومة من هذه المحادثة",
     bannerImageAlt: "لافتة {title}",
     liveConsultation: "استشارة مباشرة",
     closedConsultation: "استشارة مغلقة",
@@ -366,7 +367,6 @@ export const projectPageTranslations: Readonly<
     emptyActivities: "لم يتم نشر أي أنشطة بعد.",
     allActivitiesLoaded: "تم تحميل جميع الأنشطة",
     projectDetailsAriaLabel: "تفاصيل المشروع",
-    behindThisTitle: "من يقف وراء هذا",
     sponsorsTitle: "الرعاة",
     projectOwnersTitle: "مالكو المشروع",
     partnersTitle: "الشركاء",
@@ -401,6 +401,7 @@ export const projectPageTranslations: Readonly<
     languageSearchPlaceholder: "جستجوی زبان‌ها",
     languageNoResults: "هیچ زبان مطابقی پیدا نشد",
     languageSupportedByProject: "پشتیبانی‌شده توسط این پروژه",
+    languageSupportedByConversation: "پشتیبانی‌شده توسط این گفت‌وگو",
     bannerImageAlt: "بنر {title}",
     liveConsultation: "مشاوره زنده",
     closedConsultation: "مشاوره بسته‌شده",
@@ -411,7 +412,6 @@ export const projectPageTranslations: Readonly<
     emptyActivities: "هنوز هیچ فعالیتی منتشر نشده است.",
     allActivitiesLoaded: "همه فعالیت‌ها بارگذاری شدند",
     projectDetailsAriaLabel: "جزئیات پروژه",
-    behindThisTitle: "چه کسانی پشت این پروژه هستند",
     sponsorsTitle: "حامیان مالی",
     projectOwnersTitle: "مالکان پروژه",
     partnersTitle: "شرکا",
@@ -446,6 +446,7 @@ export const projectPageTranslations: Readonly<
     languageSearchPlaceholder: "חיפוש שפות",
     languageNoResults: "לא נמצאו שפות מתאימות",
     languageSupportedByProject: "נתמך על ידי הפרויקט הזה",
+    languageSupportedByConversation: "נתמך על ידי השיחה הזו",
     bannerImageAlt: "באנר של {title}",
     liveConsultation: "התייעצות פעילה",
     closedConsultation: "התייעצות סגורה",
@@ -456,7 +457,6 @@ export const projectPageTranslations: Readonly<
     emptyActivities: "עדיין לא פורסמו פעילויות.",
     allActivitiesLoaded: "כל הפעילויות נטענו",
     projectDetailsAriaLabel: "פרטי הפרויקט",
-    behindThisTitle: "מי עומד מאחורי זה",
     sponsorsTitle: "נותני חסות",
     projectOwnersTitle: "בעלי הפרויקט",
     partnersTitle: "שותפים",
@@ -491,6 +491,7 @@ export const projectPageTranslations: Readonly<
     languageSearchPlaceholder: "Тилдерди издөө",
     languageNoResults: "Дал келген тилдер жок",
     languageSupportedByProject: "Бул долбоор колдойт",
+    languageSupportedByConversation: "Бул талкуу колдойт",
     bannerImageAlt: "{title} баннери",
     liveConsultation: "Жандуу консультация",
     closedConsultation: "Жабылган консультация",
@@ -501,7 +502,6 @@ export const projectPageTranslations: Readonly<
     emptyActivities: "Азырынча иш-чаралар жарыялана элек.",
     allActivitiesLoaded: "Бардык иш-чаралар жүктөлдү",
     projectDetailsAriaLabel: "Долбоор тууралуу маалымат",
-    behindThisTitle: "Бул долбоордун артында ким турат",
     sponsorsTitle: "Демөөрчүлөр",
     projectOwnersTitle: "Долбоор ээлери",
     partnersTitle: "Өнөктөштөр",
@@ -536,6 +536,7 @@ export const projectPageTranslations: Readonly<
     languageSearchPlaceholder: "Поиск языков",
     languageNoResults: "Подходящие языки не найдены",
     languageSupportedByProject: "Поддерживается этим проектом",
+    languageSupportedByConversation: "Поддерживается этим обсуждением",
     bannerImageAlt: "Баннер: {title}",
     liveConsultation: "Живая консультация",
     closedConsultation: "Закрытая консультация",
@@ -546,7 +547,6 @@ export const projectPageTranslations: Readonly<
     emptyActivities: "Активности пока не опубликованы.",
     allActivitiesLoaded: "Все активности загружены",
     projectDetailsAriaLabel: "Информация о проекте",
-    behindThisTitle: "Кто за этим стоит",
     sponsorsTitle: "Спонсоры",
     projectOwnersTitle: "Владельцы проекта",
     partnersTitle: "Партнеры",
