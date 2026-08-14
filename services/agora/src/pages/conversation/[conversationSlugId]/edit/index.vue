@@ -143,7 +143,6 @@ import NewConversationLayout from "src/components/newConversation/NewConversatio
 import PageLoadingSpinner from "src/components/ui/PageLoadingSpinner.vue";
 import ZKCard from "src/components/ui-library/ZKCard.vue";
 import {
-  areConversationMultilingualSettingsEqual,
   useConversationDraft,
   type ValidationErrorField,
 } from "src/composables/conversation/draft";
@@ -167,6 +166,10 @@ import { useBackendPostEditApi } from "src/utils/api/post/postEdit";
 import { useUpdateConversationMutation } from "src/utils/api/post/useConversationMutations";
 import { getConversationEditReturnPath } from "src/utils/router/conversationEditReturn";
 import { getSingleRouteParam } from "src/utils/router/params";
+import {
+  areConversationMultilingualSettingsEqual,
+  cloneConversationMultilingualSetting,
+} from "src/utils/translation/conversationMultilingualSetting";
 import { useNotify } from "src/utils/ui/notify";
 import { computed, nextTick, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
@@ -498,8 +501,12 @@ async function performSave(): Promise<void> {
       isIndexed: !isPrivate.value,
       participationMode: participationMode.value,
       requiresEventTicket: requiresEventTicket.value,
-      aiLabelingEnabled: aiLabelingEnabled.value,
-      preferredOpinionGroupCount: preferredOpinionGroupCount.value,
+      ...(conversationType.value === "polis"
+        ? {
+            aiLabelingEnabled: aiLabelingEnabled.value,
+            preferredOpinionGroupCount: preferredOpinionGroupCount.value,
+          }
+        : {}),
     });
 
     if (response.success) {
@@ -637,6 +644,7 @@ onMounted(async () => {
       preferredOpinionGroupCount: response.preferredOpinionGroupCount,
       surveyConfig: response.surveyConfig ?? null,
     });
+    conversationTypeConfig.value = response.conversationTypeConfig;
     editPermissions.value = response.editPermissions;
     currentProjectLanguageProject.value =
       response.projectLanguageProject === undefined
@@ -655,7 +663,9 @@ onMounted(async () => {
       isPrivate: !response.isIndexed,
       participationMode: response.participationMode,
       requiresEventTicket: response.requiresEventTicket,
-      multilingualSetting: response.multilingualSetting,
+      multilingualSetting: cloneConversationMultilingualSetting(
+        response.multilingualSetting
+      ),
       selectedProjectSlug: response.projectLanguageProject?.projectSlug,
       inheritProjectLanguages:
         response.languageSettingsSource === "project_inherited" &&

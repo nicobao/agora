@@ -3,6 +3,7 @@ import {
     type GetConversationResponse,
     type ImportConversationResponse,
     type ImportCsvConversationResponse,
+    type ProjectDocumentUploadMetadata,
     type SurveyFormFetchResponse,
 } from "@/shared/types/dto.js";
 import {
@@ -48,6 +49,8 @@ import {
 } from "fastify-type-provider-zod";
 import fs from "fs";
 import { Transform } from "node:stream";
+import pLimit from "p-limit";
+import { parseJSONObject } from "parse-json-object";
 import type { z } from "zod";
 import {
     config,
@@ -60,6 +63,7 @@ import * as authService from "@/service/auth.js";
 import * as authUtilService from "@/service/authUtil.js";
 import * as csvImportService from "@/service/csvImport.js";
 import * as feedService from "@/service/feed.js";
+import * as projectDocumentService from "@/service/projectDocument.js";
 import * as projectPageService from "@/service/projectPage.js";
 import * as postService from "@/service/post.js";
 import * as postEditService from "@/service/postEdit.js";
@@ -68,6 +72,10 @@ import * as premiumEntitlementService from "@/service/premiumEntitlement.js";
 import * as surveyService from "@/service/survey.js";
 import { useCommonPost } from "@/service/common.js";
 import { MAX_CSV_FILE_SIZE } from "@/shared-app-api/csvUpload.js";
+import {
+    MAX_PROJECT_DOCUMENT_FILE_SIZE,
+    PROJECT_DOCUMENT_UPLOAD_FIELD_NAMES,
+} from "@/shared/projectDocument.js";
 import { checkFeatureAccess } from "@/shared-app-api/featureAccess.js";
 import { zodCsvFiles } from "@/service/csvImport.js";
 import * as conversationExportService from "@/service/conversationExport/index.js";
@@ -236,6 +244,9 @@ import {
 import type {
     ConversationMultilingualSetting,
     DeviceIsKnownTrueLoginStatus,
+    SurveyConfig,
+    SurveyQuestionContentVariant,
+    SurveyQuestionResultDisplayContent,
 } from "./shared/types/zod.js";
 import type { DeviceLoginStatusInternal } from "./service/authUtil.js";
 import {
@@ -310,10 +321,10 @@ server.register(fastifyCors, {
     },
 });
 
-// Register multipart plugin for file uploads (for CSV import)
+// Register multipart once for CSV imports and project documents.
 server.register(fastifyMultipart, {
     limits: {
-        fileSize: MAX_CSV_FILE_SIZE,
+        fileSize: Math.max(MAX_CSV_FILE_SIZE, MAX_PROJECT_DOCUMENT_FILE_SIZE),
         files: 3,
     },
 });
@@ -712,7 +723,7 @@ async function getPreferredContentTranslationAvailabilityForConversation({
     };
 }
 
-async function getOpinionDisplayContentPreferencesForConversation({
+async function getDisplayContentPreferencesForConversation({
     database = db,
     conversationSlugId,
     personalizationUserId,
@@ -872,6 +883,55 @@ if (config.EXPORT_CONVOS_ENABLED) {
     }
 }
 
+const hasProjectDocumentBucket =
+    config.PROJECT_DOCUMENTS_AWS_S3_BUCKET_NAME !== undefined;
+const hasProjectDocumentRegion =
+    config.PROJECT_DOCUMENTS_AWS_S3_REGION !== undefined;
+let projectDocumentCleanupInterval: NodeJS.Timeout | undefined;
+let projectDocumentCleanupInProgress = false;
+
+function runProjectDocumentCleanup(): void {
+    if (projectDocumentCleanupInProgress) {
+        return;
+    }
+    projectDocumentCleanupInProgress = true;
+    void (async () => {
+        try {
+            await projectDocumentService.cleanupProjectDocumentStorage({ db });
+        } catch (error: unknown) {
+            log.error(error, "[ProjectDocument] Storage cleanup failed");
+        } finally {
+            projectDocumentCleanupInProgress = false;
+        }
+    })();
+}
+if (hasProjectDocumentBucket !== hasProjectDocumentRegion) {
+    log.error(
+        "[API] Both project document S3 bucket and region must be configured",
+    );
+    process.exit(1);
+}
+if (
+    config.PROJECT_DOCUMENTS_AWS_S3_BUCKET_NAME !== undefined &&
+    config.PROJECT_DOCUMENTS_AWS_S3_REGION !== undefined
+) {
+    try {
+        await validateS3Access({
+            bucketName: config.PROJECT_DOCUMENTS_AWS_S3_BUCKET_NAME,
+            region: config.PROJECT_DOCUMENTS_AWS_S3_REGION,
+        });
+        runProjectDocumentCleanup();
+        projectDocumentCleanupInterval = setInterval(
+            runProjectDocumentCleanup,
+            15 * 60 * 1000,
+        );
+        projectDocumentCleanupInterval.unref();
+    } catch (error: unknown) {
+        log.error(error, "[API] Failed to validate project document storage");
+        process.exit(1);
+    }
+}
+
 // Initialize Google Cloud Translation credentials (optional)
 let googleCloudCredentials: GoogleCloudCredentials | undefined = undefined;
 if (
@@ -916,6 +976,114 @@ const queueValkeyRef: ValkeyRef = {
 const contentTranslationQueueScript = new Script(
     ENQUEUE_CONTENT_TRANSLATION_WORK_SCRIPT,
 );
+const SURVEY_DISPLAY_CONTENT_CONCURRENCY = 5;
+
+function getSurveyQuestionConfigContent(
+    question: SurveyConfig["questions"][number],
+): SurveyQuestionContentVariant | undefined {
+    if (question.questionType === "free_text") {
+        return { questionText: question.questionText, options: [] };
+    }
+    const options = question.options.flatMap((option) =>
+        option.optionSlugId === undefined
+            ? []
+            : [
+                  {
+                      optionSlugId: option.optionSlugId,
+                      optionText: option.optionText,
+                  },
+              ],
+    );
+    return options.length === question.options.length
+        ? { questionText: question.questionText, options }
+        : undefined;
+}
+
+function areSurveyQuestionContentsEqual({
+    left,
+    right,
+}: {
+    left: SurveyQuestionContentVariant;
+    right: SurveyQuestionContentVariant;
+}): boolean {
+    return (
+        left.questionText === right.questionText &&
+        left.options.length === right.options.length &&
+        left.options.every(
+            (option, index) =>
+                option.optionSlugId === right.options[index]?.optionSlugId &&
+                option.optionText === right.options[index]?.optionText,
+        )
+    );
+}
+
+async function getSurveyQuestionDisplayContents({
+    conversationSlugId,
+    questions,
+    displayLanguage,
+    spokenLanguages,
+    targetLanguage,
+    translationAllowed,
+}: {
+    conversationSlugId: string;
+    questions: SurveyConfig["questions"];
+    displayLanguage: SupportedDisplayLanguageCodes;
+    spokenLanguages: SupportedSpokenLanguageCodes[];
+    targetLanguage: SupportedDisplayLanguageCodes;
+    translationAllowed: boolean;
+}): Promise<SurveyQuestionResultDisplayContent[]> {
+    const limit = pLimit(SURVEY_DISPLAY_CONTENT_CONCURRENCY);
+    const displayContents = await Promise.all(
+        questions.map((question) =>
+            limit(async () => {
+                if (question.questionSlugId === undefined) {
+                    return undefined;
+                }
+                const localizedContent =
+                    await contentTranslationService.requestSurveyQuestionContentTranslation(
+                        {
+                            db,
+                            valkey: queueValkeyRef.current,
+                            queueScript: contentTranslationQueueScript,
+                            conversationSlugId,
+                            questionSlugId: question.questionSlugId,
+                            targetLanguageCode: targetLanguage,
+                            requestMode: "read_existing",
+                            now: nowZeroMs(),
+                            log,
+                            beforeQueueTranslationWork: () => Promise.resolve(),
+                        },
+                    );
+                const sourceContent =
+                    localizedContent?.content.variants.original;
+                if (
+                    localizedContent === undefined ||
+                    sourceContent === undefined
+                ) {
+                    return undefined;
+                }
+
+                return {
+                    questionSlugId: question.questionSlugId,
+                    sourceContent,
+                    displayContent:
+                        conversationContentService.toSurveyQuestionDisplayContent(
+                            {
+                                content: localizedContent.content,
+                                translationAllowed,
+                                displayLanguage,
+                                spokenLanguages,
+                            },
+                        ),
+                };
+            }),
+        ),
+    );
+    return displayContents.flatMap((content) =>
+        content === undefined ? [] : [content],
+    );
+}
+
 const contentTranslationUserRateLimitScript = new Script(
     CONTENT_TRANSLATION_USER_RATE_LIMIT_SCRIPT,
 );
@@ -2221,6 +2389,33 @@ server.after(() => {
 
     server.withTypeProvider<ZodTypeProvider>().route({
         method: "POST",
+        url: `/api/${apiVersion}/project/document/access`,
+        schema: {
+            body: Dto.accessProjectDocumentRequest,
+            response: {
+                200: Dto.accessProjectDocumentResponse,
+            },
+        },
+        handler: async (request) => {
+            const { deviceStatus } = await verifyUcanAndKnownDeviceStatus(
+                db,
+                request,
+                {
+                    expectedKnownDeviceStatus: {
+                        isGuestOrLoggedIn: true,
+                    },
+                },
+            );
+            return await projectDocumentService.accessProjectDocument({
+                db,
+                request: request.body,
+                userId: deviceStatus.userId,
+            });
+        },
+    });
+
+    server.withTypeProvider<ZodTypeProvider>().route({
+        method: "POST",
         url: `/api/${apiVersion}/project/conversation/fetch`,
         schema: {
             body: Dto.fetchProjectConversationPageRequest,
@@ -3223,7 +3418,7 @@ server.after(() => {
                 frameKey: request.body.frameKey,
                 personalizationUserId,
                 resolveDisplayContentPreferences: async ({ db: analysisDb }) =>
-                    await getOpinionDisplayContentPreferencesForConversation({
+                    await getDisplayContentPreferencesForConversation({
                         database: analysisDb,
                         conversationSlugId: request.body.conversationSlugId,
                         personalizationUserId,
@@ -3284,7 +3479,7 @@ server.after(() => {
                 personalizationUserId,
                 kind: request.body.kind,
                 resolveDisplayContentPreferences: async ({ db: analysisDb }) =>
-                    await getOpinionDisplayContentPreferencesForConversation({
+                    await getDisplayContentPreferencesForConversation({
                         database: analysisDb,
                         conversationSlugId: request.body.conversationSlugId,
                         personalizationUserId,
@@ -4343,86 +4538,59 @@ server.after(() => {
             const headerDisplayLanguage = getRequestDisplayLanguage({
                 request,
             });
-            const languagePreferences = deviceStatus.isKnown
-                ? await getLanguagePreferences({
-                      db,
-                      userId: deviceStatus.userId,
-                      request: {
-                          currentDisplayLanguage: headerDisplayLanguage,
-                      },
-                  })
-                : {
-                      displayLanguage: headerDisplayLanguage,
-                      spokenLanguages: [headerDisplayLanguage],
-                  };
-            const surveyForm = await surveyService.fetchSurveyForm({
-                db,
-                conversationSlugId: request.body.conversationSlugId,
-                participantId: deviceStatus.isKnown
-                    ? deviceStatus.userId
-                    : undefined,
-            });
-            const preferredContentTranslation =
-                await getPreferredContentTranslationAvailabilityForConversation(
-                    {
-                        conversationSlugId: request.body.conversationSlugId,
-                        displayLanguage: languagePreferences.displayLanguage,
-                    },
-                );
-            const questions = await Promise.all(
-                surveyForm.questions.map(async (question) => {
-                    const localizedContent =
-                        question.questionSlugId === undefined
-                            ? undefined
-                            : await contentTranslationService.requestSurveyQuestionContentTranslation(
-                                  {
-                                      db,
-                                      valkey: queueValkeyRef.current,
-                                      queueScript:
-                                          contentTranslationQueueScript,
-                                      conversationSlugId:
-                                          request.body.conversationSlugId,
-                                      questionSlugId: question.questionSlugId,
-                                      targetLanguageCode:
-                                          preferredContentTranslation.targetLanguageCode,
-                                      requestMode: "read_existing",
-                                      now: nowZeroMs(),
-                                      log,
-                                      beforeQueueTranslationWork: () =>
-                                          Promise.resolve(),
-                                  },
-                              );
-                    if (localizedContent === undefined) {
-                        return {
-                            ...question,
-                            displayContent: undefined,
-                        };
-                    }
-
-                    return {
-                        ...question,
-                        displayContent:
-                            conversationContentService.toSurveyQuestionDisplayContent(
-                                {
-                                    content: localizedContent.content,
-                                    translationAllowed:
-                                        preferredContentTranslation.isAllowed,
-                                    displayLanguage:
-                                        languagePreferences.displayLanguage,
-                                    spokenLanguages:
-                                        languagePreferences.spokenLanguages,
-                                },
-                            ),
-                    };
+            const [surveyForm, displayContentPreferences] = await Promise.all([
+                surveyService.fetchSurveyForm({
+                    db,
+                    conversationSlugId: request.body.conversationSlugId,
+                    participantId: deviceStatus.isKnown
+                        ? deviceStatus.userId
+                        : undefined,
                 }),
+                getDisplayContentPreferencesForConversation({
+                    conversationSlugId: request.body.conversationSlugId,
+                    personalizationUserId: deviceStatus.isKnown
+                        ? deviceStatus.userId
+                        : undefined,
+                    headerDisplayLanguage,
+                }),
+            ]);
+            const questionDisplayContents =
+                await getSurveyQuestionDisplayContents({
+                    conversationSlugId: request.body.conversationSlugId,
+                    questions: surveyForm.questions,
+                    displayLanguage: displayContentPreferences.displayLanguage,
+                    spokenLanguages: displayContentPreferences.spokenLanguages,
+                    targetLanguage: displayContentPreferences.targetLanguage,
+                    translationAllowed:
+                        displayContentPreferences.translationAllowed,
+                });
+            const displayContentsByQuestionSlugId = new Map(
+                questionDisplayContents.map((content) => [
+                    content.questionSlugId,
+                    content,
+                ]),
             );
             const responseQuestions: Extract<
                 SurveyFormFetchResponse,
                 { success: true }
             >["questions"] = [];
-            for (const question of questions) {
-                const { displayContent } = question;
-                if (displayContent === undefined) {
+            for (const question of surveyForm.questions) {
+                const questionDisplayContent =
+                    question.questionSlugId === undefined
+                        ? undefined
+                        : displayContentsByQuestionSlugId.get(
+                              question.questionSlugId,
+                          );
+                const formSourceContent =
+                    getSurveyQuestionConfigContent(question);
+                if (
+                    questionDisplayContent === undefined ||
+                    formSourceContent === undefined ||
+                    !areSurveyQuestionContentsEqual({
+                        left: questionDisplayContent.sourceContent,
+                        right: formSourceContent,
+                    })
+                ) {
                     return {
                         success: false as const,
                         reason: "content_not_found" as const,
@@ -4430,7 +4598,7 @@ server.after(() => {
                 }
                 responseQuestions.push({
                     ...question,
-                    displayContent,
+                    displayContent: questionDisplayContent.displayContent,
                 });
             }
             const response: SurveyFormFetchResponse = {
@@ -4594,25 +4762,45 @@ server.after(() => {
                 parsedHeaderDisplayLanguage.success
                     ? parsedHeaderDisplayLanguage.data
                     : "en";
-            const displayLanguage = deviceStatus.isKnown
-                ? (
-                      await getLanguagePreferences({
-                          db,
-                          userId: deviceStatus.userId,
-                          request: {
-                              currentDisplayLanguage: headerDisplayLanguage,
-                          },
-                      })
-                  ).displayLanguage
-                : headerDisplayLanguage;
-            return await surveyService.fetchSurveyAggregatedResults({
-                db,
-                conversationSlugId: request.body.conversationSlugId,
-                analysisView: request.body.analysisView,
-                checkpointViewSnapshotId: request.body.checkpointViewSnapshotId,
-                userId: deviceStatus.isKnown ? deviceStatus.userId : undefined,
-                displayLanguage,
-            });
+            const displayContentPreferences =
+                await getDisplayContentPreferencesForConversation({
+                    conversationSlugId: request.body.conversationSlugId,
+                    personalizationUserId: deviceStatus.isKnown
+                        ? deviceStatus.userId
+                        : undefined,
+                    headerDisplayLanguage,
+                });
+            const [surveyResults, surveyConfig] = await Promise.all([
+                surveyService.fetchSurveyAggregatedResults({
+                    db,
+                    conversationSlugId: request.body.conversationSlugId,
+                    analysisView: request.body.analysisView,
+                    checkpointViewSnapshotId:
+                        request.body.checkpointViewSnapshotId,
+                    userId: deviceStatus.isKnown
+                        ? deviceStatus.userId
+                        : undefined,
+                    displayLanguage: displayContentPreferences.displayLanguage,
+                }),
+                surveyService.fetchSurveyConfig({
+                    db,
+                    conversationSlugId: request.body.conversationSlugId,
+                }),
+            ]);
+            if (surveyConfig === undefined) {
+                return { ...surveyResults, questionDisplayContents: [] };
+            }
+            const questionDisplayContents =
+                await getSurveyQuestionDisplayContents({
+                    conversationSlugId: request.body.conversationSlugId,
+                    questions: surveyConfig.questions,
+                    displayLanguage: displayContentPreferences.displayLanguage,
+                    spokenLanguages: displayContentPreferences.spokenLanguages,
+                    targetLanguage: displayContentPreferences.targetLanguage,
+                    translationAllowed:
+                        displayContentPreferences.translationAllowed,
+                });
+            return { ...surveyResults, questionDisplayContents };
         },
     });
     server.withTypeProvider<ZodTypeProvider>().route({
@@ -5063,6 +5251,158 @@ server.after(() => {
             await archiveProject({
                 db,
                 projectSlug: request.body.projectSlug,
+            });
+            try {
+                await projectDocumentService.cleanupProjectDocumentStorage({
+                    db,
+                    projectSlug: request.body.projectSlug,
+                });
+            } catch (error: unknown) {
+                log.error(
+                    error,
+                    "[ProjectDocument] Project cleanup will be retried",
+                );
+            }
+        },
+    });
+
+    server.withTypeProvider<ZodTypeProvider>().route({
+        method: "POST",
+        url: `/api/${apiVersion}/administrator/project/document/list`,
+        schema: {
+            body: Dto.listProjectDocumentsRequest,
+            response: {
+                200: Dto.listProjectDocumentsResponse,
+            },
+        },
+        handler: async (request) => {
+            await requireSiteOrgAdmin(request);
+            return await projectDocumentService.listProjectDocuments({
+                db,
+                projectSlug: request.body.projectSlug,
+            });
+        },
+    });
+
+    server.withTypeProvider<ZodTypeProvider>().route({
+        method: "POST",
+        url: `/api/${apiVersion}/administrator/project/document/upload`,
+        schema: {
+            consumes: ["multipart/form-data"],
+            response: {
+                200: Dto.uploadProjectDocumentResponse,
+            },
+        },
+        config: {
+            rateLimit: {
+                max: 5,
+                timeWindow: "1 minute",
+            },
+        },
+        handler: async (request) => {
+            const adminUserId = await requireSiteOrgAdmin(request);
+            const parts = request.parts({
+                limits: {
+                    fileSize: MAX_PROJECT_DOCUMENT_FILE_SIZE,
+                    files: 2,
+                    fields: 1,
+                    parts: 3,
+                },
+            });
+            let metadata: ProjectDocumentUploadMetadata | undefined;
+            let participantFile:
+                | projectDocumentService.ProjectDocumentFileUpload
+                | undefined;
+            let ownerFile:
+                | projectDocumentService.ProjectDocumentFileUpload
+                | undefined;
+            for await (const part of parts) {
+                if (part.type === "file") {
+                    const isParticipantFile =
+                        part.fieldname ===
+                        PROJECT_DOCUMENT_UPLOAD_FIELD_NAMES.PARTICIPANT_FILE;
+                    const isOwnerFile =
+                        part.fieldname ===
+                        PROJECT_DOCUMENT_UPLOAD_FIELD_NAMES.OWNER_FILE;
+                    if (
+                        (!isParticipantFile && !isOwnerFile) ||
+                        (isParticipantFile && participantFile !== undefined) ||
+                        (isOwnerFile && ownerFile !== undefined)
+                    ) {
+                        throw server.httpErrors.badRequest(
+                            "Unexpected project document file field",
+                        );
+                    }
+                    const buffer = await part.toBuffer();
+                    if (buffer.length > MAX_PROJECT_DOCUMENT_FILE_SIZE) {
+                        throw server.httpErrors.payloadTooLarge(
+                            "Project document exceeds the maximum file size",
+                        );
+                    }
+                    const uploadedFile = {
+                        buffer,
+                        originalFileName: part.filename,
+                        reportedContentType: part.mimetype,
+                    };
+                    if (isParticipantFile) {
+                        participantFile = uploadedFile;
+                    } else {
+                        ownerFile = uploadedFile;
+                    }
+                    continue;
+                }
+                if (
+                    part.fieldname !==
+                        PROJECT_DOCUMENT_UPLOAD_FIELD_NAMES.METADATA ||
+                    metadata !== undefined ||
+                    typeof part.value !== "string"
+                ) {
+                    throw server.httpErrors.badRequest(
+                        "Unexpected project document metadata field",
+                    );
+                }
+                const parsedMetadata = parseJSONObject(part.value);
+                if (parsedMetadata === undefined) {
+                    throw server.httpErrors.badRequest(
+                        "Project document metadata must be valid JSON",
+                    );
+                }
+                const parsedResult =
+                    Dto.projectDocumentUploadMetadata.safeParse(parsedMetadata);
+                if (!parsedResult.success) {
+                    throw server.httpErrors.badRequest(
+                        "Project document metadata is invalid",
+                    );
+                }
+                metadata = parsedResult.data;
+            }
+            if (metadata === undefined || participantFile === undefined) {
+                throw server.httpErrors.badRequest(
+                    "Participant document file and metadata are required",
+                );
+            }
+            return await projectDocumentService.uploadProjectDocument({
+                db,
+                metadata,
+                createdByUserId: adminUserId,
+                participantFile,
+                ownerFile,
+            });
+        },
+    });
+
+    server.withTypeProvider<ZodTypeProvider>().route({
+        method: "POST",
+        url: `/api/${apiVersion}/administrator/project/document/delete`,
+        schema: {
+            body: Dto.deleteProjectDocumentRequest,
+        },
+        handler: async (request) => {
+            await requireSiteOrgAdmin(request);
+            await projectDocumentService.deleteProjectDocument({
+                db,
+                projectSlug: request.body.projectSlug,
+                documentId: request.body.documentId,
             });
         },
     });
@@ -6332,6 +6672,10 @@ const shutdown = async (signal: string) => {
         if (queueValkeyReconnectInterval !== undefined) {
             clearInterval(queueValkeyReconnectInterval);
             queueValkeyReconnectInterval = undefined;
+        }
+        if (projectDocumentCleanupInterval !== undefined) {
+            clearInterval(projectDocumentCleanupInterval);
+            projectDocumentCleanupInterval = undefined;
         }
 
         // Flush pending votes before shutdown

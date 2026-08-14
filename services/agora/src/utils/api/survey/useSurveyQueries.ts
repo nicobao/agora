@@ -4,6 +4,8 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/vue-query";
+import { storeToRefs } from "pinia";
+import { useComponentI18n } from "src/composables/ui/useComponentI18n";
 import type {
   SurveyFormFetchResponse,
   SurveyStatusCheckResponse,
@@ -15,6 +17,7 @@ import {
   type SurveyGateSummary,
   type SurveyRouteResolution,
 } from "src/shared/types/zod";
+import { useLanguageStore } from "src/stores/language";
 import { useBackendAuthApi } from "src/utils/api/auth";
 import {
   buildSurveyAnswerSubmission,
@@ -26,8 +29,15 @@ import { computed, type MaybeRefOrGetter, toValue } from "vue";
 import { updateConversationQueryCache } from "../post/useConversationQuery";
 import { useBackendSurveyApi } from "./survey";
 import { isLiveSurveyResultsQueryKey } from "./surveyQueryKeys";
+import {
+  type UseSurveyQueriesTranslations,
+  useSurveyQueriesTranslations,
+} from "./useSurveyQueries.i18n";
 
-export type SurveyFormData = Extract<SurveyFormFetchResponse, { success: true }>;
+export type SurveyFormData = Extract<
+  SurveyFormFetchResponse,
+  { success: true }
+>;
 type SurveyFormQuestion = SurveyFormData["questions"][number];
 
 function deriveSurveyRouteResolutionFromForm({
@@ -92,7 +102,10 @@ function updateSurveyStatusCache({
   conversationSlugId: string;
   surveyGate: SurveyGateSummary;
 }): void {
-  const cachedSurveyForm = getCachedSurveyForm({ queryClient, conversationSlugId });
+  const cachedSurveyForm = getCachedSurveyForm({
+    queryClient,
+    conversationSlugId,
+  });
   const routeResolution = deriveSurveyRouteResolutionFromForm({
     surveyGate,
     surveyForm: cachedSurveyForm,
@@ -316,7 +329,9 @@ export function useSurveyStatusQuery({
       }
       return response.data;
     },
-    enabled: computed(() => toValue(enabled) && toValue(conversationSlugId) !== ""),
+    enabled: computed(
+      () => toValue(enabled) && toValue(conversationSlugId) !== ""
+    ),
     staleTime: 30 * 1000,
     retry: false,
   });
@@ -331,9 +346,18 @@ export function useSurveyFormQuery({
 }) {
   const { fetchSurveyForm } = useBackendSurveyApi();
   const { showNotifyMessage } = useNotify();
+  const { t } = useComponentI18n<UseSurveyQueriesTranslations>(
+    useSurveyQueriesTranslations
+  );
+  const { displayLanguage, spokenLanguages } = storeToRefs(useLanguageStore());
 
   return useQuery({
-    queryKey: ["survey-form", computed(() => toValue(conversationSlugId))],
+    queryKey: [
+      "survey-form",
+      computed(() => toValue(conversationSlugId)),
+      displayLanguage,
+      computed(() => [...spokenLanguages.value].sort()),
+    ],
     queryFn: async (): Promise<SurveyFormData> => {
       const response = await fetchSurveyForm({
         conversationSlugId: toValue(conversationSlugId),
@@ -343,13 +367,15 @@ export function useSurveyFormQuery({
       }
       if (!response.data.success) {
         if (response.data.reason === "content_not_found") {
-          showNotifyMessage("Original content not found");
+          showNotifyMessage(t("originalContentNotFound"));
         }
         throw new Error("Failed to load survey form");
       }
       return response.data;
     },
-    enabled: computed(() => toValue(enabled) && toValue(conversationSlugId) !== ""),
+    enabled: computed(
+      () => toValue(enabled) && toValue(conversationSlugId) !== ""
+    ),
     staleTime: 30 * 1000,
     retry: false,
   });
@@ -367,6 +393,7 @@ export function useSurveyResultsAggregatedQuery({
   enabled?: MaybeRefOrGetter<boolean>;
 }) {
   const { fetchSurveyResultsAggregated } = useBackendSurveyApi();
+  const { displayLanguage, spokenLanguages } = storeToRefs(useLanguageStore());
 
   return useQuery({
     queryKey: [
@@ -374,6 +401,8 @@ export function useSurveyResultsAggregatedQuery({
       computed(() => toValue(conversationSlugId)),
       computed(() => toValue(analysisView)),
       computed(() => toValue(checkpointViewSnapshotId)),
+      displayLanguage,
+      computed(() => [...spokenLanguages.value].sort()),
     ],
     queryFn: async () => {
       const response = await fetchSurveyResultsAggregated({
@@ -386,7 +415,9 @@ export function useSurveyResultsAggregatedQuery({
       }
       return response.data;
     },
-    enabled: computed(() => toValue(enabled) && toValue(conversationSlugId) !== ""),
+    enabled: computed(
+      () => toValue(enabled) && toValue(conversationSlugId) !== ""
+    ),
     staleTime: 30 * 1000,
     retry: false,
   });
@@ -402,7 +433,10 @@ export function useSurveyCompletionCountsQuery({
   const { fetchSurveyCompletionCounts } = useBackendSurveyApi();
 
   return useQuery({
-    queryKey: ["survey-completion-counts", computed(() => toValue(conversationSlugId))],
+    queryKey: [
+      "survey-completion-counts",
+      computed(() => toValue(conversationSlugId)),
+    ],
     queryFn: async () => {
       const response = await fetchSurveyCompletionCounts({
         conversationSlugId: toValue(conversationSlugId),
@@ -412,7 +446,9 @@ export function useSurveyCompletionCountsQuery({
       }
       return response.data;
     },
-    enabled: computed(() => toValue(enabled) && toValue(conversationSlugId) !== ""),
+    enabled: computed(
+      () => toValue(enabled) && toValue(conversationSlugId) !== ""
+    ),
     staleTime: 30 * 1000,
     retry: false,
   });

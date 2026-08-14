@@ -68,7 +68,6 @@ export const zodConversationTypeConfig = z.discriminatedUnion(
         z
             .object({
                 conversationType: z.literal("polis"),
-                rankingMode: z.undefined().optional(),
             })
             .strict(),
         z
@@ -924,6 +923,13 @@ export const zodSurveyQuestionDisplayedContent = createZodDisplayedContent(
     zodSurveyQuestionContentVariant,
     zodTranslatedSurveyQuestionContentVariant,
 );
+export const zodSurveyQuestionResultDisplayContent = z
+    .object({
+        questionSlugId: zodSlugId,
+        sourceContent: zodSurveyQuestionContentVariant,
+        displayContent: zodSurveyQuestionDisplayedContent,
+    })
+    .strict();
 
 const zodSurveyQuestionBase = z
     .object({
@@ -2142,6 +2148,12 @@ export type SurveyQuestionConstraints = z.infer<
 export type SurveyQuestionOption = z.infer<typeof zodSurveyQuestionOption>;
 export type SurveyQuestionContentVariant = z.infer<
     typeof zodSurveyQuestionContentVariant
+>;
+export type SurveyQuestionDisplayedContent = z.infer<
+    typeof zodSurveyQuestionDisplayedContent
+>;
+export type SurveyQuestionResultDisplayContent = z.infer<
+    typeof zodSurveyQuestionResultDisplayContent
 >;
 export type LocalizedSurveyQuestionContent = z.infer<
     typeof zodLocalizedSurveyQuestionContent
