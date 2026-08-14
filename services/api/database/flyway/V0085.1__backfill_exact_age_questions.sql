@@ -9,40 +9,32 @@ INSERT INTO age_group_migration_prompts (
 )
 VALUES
     ('en', 'What is your age group?'),
-    ('ar', 'ما هي فئتك العمرية؟'),
-    ('es', '¿Cuál es tu grupo de edad?'),
-    ('fa', 'گروه سنی شما چیست؟'),
-    ('fr', 'Quelle est votre tranche d''âge ?'),
-    ('he', 'מה קבוצת הגיל שלך?'),
-    ('ja', 'あなたの年齢層を教えてください。'),
     ('ky', 'Сиз кайсы курак тобуна киресиз?'),
-    ('ru', 'Какая у вас возрастная группа?'),
-    ('zh-Hans', '您的年龄段是？'),
-    ('zh-Hant', '您的年齡層是？');
+    ('ru', 'Какая у вас возрастная группа?');
 
+-- Stable question IDs scope the destructive conversion to the reviewed age
+-- questions. The project joins below ensure they belong to Amplify; the prompt
+-- language selects source text, while translations are inserted for all
+-- project-supported locales.
 CREATE TEMP TABLE age_group_migration_reviewed_questions (
     question_slug_id varchar(8) PRIMARY KEY,
-    expected_question_text text NOT NULL,
-    prompt_language_code varchar(10) NOT NULL,
-    expected_maximum_age integer NOT NULL
+    prompt_language_code varchar(10) NOT NULL
 );
 
 INSERT INTO age_group_migration_reviewed_questions (
     question_slug_id,
-    expected_question_text,
-    prompt_language_code,
-    expected_maximum_age
+    prompt_language_code
 )
 VALUES
-    ('PGa-urM', 'Жаш курагыңыз:', 'ky', 120),
-    ('NJkXnms', 'Жаш курагыңыз:', 'ky', 120),
-    ('-qizfkg', 'Жаш курагыңыз:', 'ky', 120),
-    ('k3MnqSs', 'Жаш курагыңыз:', 'ky', 120),
-    ('fDHRwTo', 'Сиз канча жаштасыз?', 'ky', 100),
-    ('bf9kf6A', 'Канча жаштасыз?', 'ky', 100),
-    ('xR0httM', 'Сиз канча жаштасыз?', 'ky', 100),
-    ('E67oikM', 'Сиз канча жаштасыз?', 'ky', 100),
-    ('eHcznts', 'Сиздин жашыңыз канча?', 'ky', 120);
+    ('PGa-urM', 'ky'),
+    ('NJkXnms', 'ky'),
+    ('-qizfkg', 'ky'),
+    ('k3MnqSs', 'ky'),
+    ('fDHRwTo', 'ky'),
+    ('bf9kf6A', 'ky'),
+    ('xR0httM', 'ky'),
+    ('E67oikM', 'ky'),
+    ('eHcznts', 'ru');
 
 SET LOCAL lock_timeout = '10s';
 
@@ -113,15 +105,7 @@ JOIN survey_question_content question_content
 JOIN age_group_migration_reviewed_questions reviewed
     ON reviewed.question_slug_id = question.slug_id
 JOIN age_group_migration_prompts output_prompt
-    ON output_prompt.language_code = reviewed.prompt_language_code
-WHERE question.question_type = 'free_text'
-  AND question_content.question_text = reviewed.expected_question_text
-  AND question_content.constraints = jsonb_build_object(
-      'type', 'free_text',
-      'inputMode', 'integer',
-      'minValue', 1,
-      'maxValue', reviewed.expected_maximum_age
-  );
+    ON output_prompt.language_code = reviewed.prompt_language_code;
 
 CREATE TEMP TABLE age_group_migration_affected_conversations AS
 SELECT DISTINCT
