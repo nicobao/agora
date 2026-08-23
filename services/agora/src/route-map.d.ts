@@ -408,6 +408,34 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
+    '/email-updates/': RouteRecordInfo<
+      '/email-updates/',
+      '/email-updates',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
+    '/email-updates/preferences/[token]': RouteRecordInfo<
+      '/email-updates/preferences/[token]',
+      '/email-updates/preferences/:token',
+      { token: ParamValue<true> },
+      { token: ParamValue<false> },
+      | never
+    >,
+    '/email-updates/report/[token]': RouteRecordInfo<
+      '/email-updates/report/[token]',
+      '/email-updates/report/:token',
+      { token: ParamValue<true> },
+      { token: ParamValue<false> },
+      | never
+    >,
+    '/email-updates/unsubscribe/[token]': RouteRecordInfo<
+      '/email-updates/unsubscribe/[token]',
+      '/email-updates/unsubscribe/:token',
+      { token: ParamValue<true> },
+      { token: ParamValue<false> },
+      | never
+    >,
     '/legal/guidelines/': RouteRecordInfo<
       '/legal/guidelines/',
       '/legal/guidelines',
@@ -591,6 +619,13 @@ declare module 'vue-router/auto-routes' {
     '/settings/account/content-preference/': RouteRecordInfo<
       '/settings/account/content-preference/',
       '/settings/account/content-preference',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
+    '/settings/account/email-updates/': RouteRecordInfo<
+      '/settings/account/email-updates/',
+      '/settings/account/email-updates',
       Record<never, never>,
       Record<never, never>,
       | never
@@ -1073,6 +1108,30 @@ declare module 'vue-router/auto-routes' {
       views:
         | never
     }
+    'src/pages/email-updates/index.vue': {
+      routes:
+        | '/email-updates/'
+      views:
+        | never
+    }
+    'src/pages/email-updates/preferences/[token].vue': {
+      routes:
+        | '/email-updates/preferences/[token]'
+      views:
+        | never
+    }
+    'src/pages/email-updates/report/[token].vue': {
+      routes:
+        | '/email-updates/report/[token]'
+      views:
+        | never
+    }
+    'src/pages/email-updates/unsubscribe/[token].vue': {
+      routes:
+        | '/email-updates/unsubscribe/[token]'
+      views:
+        | never
+    }
     'src/pages/legal/guidelines/index.vue': {
       routes:
         | '/legal/guidelines/'
@@ -1233,6 +1292,12 @@ declare module 'vue-router/auto-routes' {
     'src/pages/settings/account/content-preference/index.vue': {
       routes:
         | '/settings/account/content-preference/'
+      views:
+        | never
+    }
+    'src/pages/settings/account/email-updates/index.vue': {
+      routes:
+        | '/settings/account/email-updates/'
       views:
         | never
     }

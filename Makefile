@@ -1,6 +1,7 @@
 all: dev
 
 LOG_RUNNER := node scripts/dev-log-runner.mjs
+OPENAPI_GENERATOR_IMAGE := openapitools/openapi-generator-cli:v7.24.0
 LOAD_TEST_CONVERSATIONS := $(or $(CONVERSATION_SLUG_IDS),$(conversations))
 CONTENT_TRANSLATION_WORKER_DEV_SCENARIO ?= simulated-success
 
@@ -19,25 +20,33 @@ PYTHON_TYPECHECK_PATTERNS := \
 
 generate:
 	docker run --rm \
-		-v ${PWD}:/local openapitools/openapi-generator-cli generate \
+		-v ${PWD}:/local $(OPENAPI_GENERATOR_IMAGE) generate \
 		-i /local/services/api/openapi-zkorum.json \
 		-g typescript-axios \
 		--global-property apiDocs=false,modelDocs=false \
 		-o /local/services/agora/src/api
 	docker run --rm \
-		-v ${PWD}:/local openapitools/openapi-generator-cli generate \
+		-v ${PWD}:/local $(OPENAPI_GENERATOR_IMAGE) generate \
 		-i /local/services/api/openapi-zkorum.json \
 		-g typescript-axios \
 		--global-property apiDocs=false,modelDocs=false \
 		-o /local/services/load-testing/src/api
 
-sync: sync-all sync-app-api sync-python-artifacts sync-api-test-db-fixtures
+sync: sync-all sync-app-api sync-ts-backend sync-python-artifacts sync-api-test-db-fixtures
 
 sync-all:
 	cd services/shared && pnpm run sync
 
 sync-app-api:
 	cd services/shared-app-api && pnpm run sync
+
+# Explicit TypeScript consumers receive generated copies from the canonical
+# services/shared-backend/src source tree.
+sync-ts-backend:
+	cd services/shared-backend && pnpm run sync
+
+# Backward-compatible alias for existing scripts and documentation.
+sync-backend: sync-ts-backend
 
 dev-sync:
 	$(LOG_RUNNER) --service shared -- $(MAKE) dev-sync-raw
@@ -51,28 +60,37 @@ dev-sync-app-api:
 dev-sync-app-api-raw:
 	watchman-make -p 'services/shared-app-api/src/**/*.ts' -t sync-app-api
 
+dev-sync-ts-backend:
+	$(LOG_RUNNER) --service shared-backend -- $(MAKE) dev-sync-ts-backend-raw
+
+dev-sync-ts-backend-raw:
+	watchman-make -p 'services/shared-backend/src/**/*.ts' -t sync-ts-backend
+
+# Backward-compatible alias for existing scripts and documentation.
+dev-sync-backend: dev-sync-ts-backend
+
 sync-python-artifacts: sync-python-models sync-python-shared-types sync-import-worker-contracts
 
-sync-python-models:
+sync-python-models: sync-ts-backend
 	cd services/api && npx drizzle-kit export > /tmp/agora-schema.sql
 	cd services/api && npx tsx scripts/sync-schema-cli.ts \
 		--service scoring-worker \
-		--schema-ts src/shared-backend/schema.ts \
+		--schema-ts ../shared-backend/src/schema.ts \
 		--sql /tmp/agora-schema.sql \
 		--output ../scoring-worker/src/scoring_worker/generated_models.py
 	cd services/api && npx tsx scripts/sync-schema-cli.ts \
 		--service shared-analysis-worker \
-		--schema-ts src/shared-backend/schema.ts \
+		--schema-ts ../shared-backend/src/schema.ts \
 		--sql /tmp/agora-schema.sql \
 		--output ../shared-analysis-worker/src/agora_analysis_worker_shared/generated_models.py
 	cd services/api && npx tsx scripts/sync-schema-cli.ts \
 		--service import-worker \
-		--schema-ts src/shared-backend/schema.ts \
+		--schema-ts ../shared-backend/src/schema.ts \
 		--sql /tmp/agora-schema.sql \
 		--output ../import-worker/src/import_worker/generated_models.py
 	cd services/api && npx tsx scripts/sync-schema-cli.ts \
 		--service content-translation-worker \
-		--schema-ts src/shared-backend/schema.ts \
+		--schema-ts ../shared-backend/src/schema.ts \
 		--sql /tmp/agora-schema.sql \
 		--output ../content-translation-worker/src/content_translation_worker/generated_models.py
 
@@ -162,6 +180,18 @@ dev-api:
 
 dev-api-raw:
 	cd services/api && pnpm start:dev
+
+dev-conversation-email-update-worker:
+	$(LOG_RUNNER) --service conversation-email-update-worker -- $(MAKE) dev-conversation-email-update-worker-raw
+
+dev-conversation-email-update-worker-raw:
+	cd services/conversation-email-update-worker && $(MAKE) dev
+
+dev-conversation-email-update-worker-scenario:
+	$(LOG_RUNNER) --service conversation-email-update-worker -- $(MAKE) dev-conversation-email-update-worker-scenario-raw
+
+dev-conversation-email-update-worker-scenario-raw:
+	scripts/run-worker-scenario.sh conversation-email-update-worker "$(SCENARIO)"
 
 dev-math-updater:
 	$(LOG_RUNNER) --service math-updater -- $(MAKE) dev-math-updater-raw
