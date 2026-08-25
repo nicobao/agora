@@ -34,9 +34,18 @@
         </SpaLink>
       </q-card-actions>
       <q-card-section>
+        <q-btn-toggle
+          v-model="onboardingScopeKind"
+          unelevated
+          no-caps
+          toggle-color="primary"
+          color="white"
+          text-color="primary"
+          :options="onboardingScopeOptions"
+        />
         <ConversationUpdateOnboardingConsent
           v-model="onboardingConsent"
-          scope-kind="project"
+          :scope-kind="onboardingScopeKind"
         />
       </q-card-section>
     </q-card>
@@ -61,18 +70,41 @@
         :related-conversation-owner-count="1"
         @test="simulateTest"
         @send="simulateSend"
-      />
+      >
+        <template #preview>
+          <div
+            v-if="$q.screen.lt.md"
+            class="conversation-updates-dev__preview"
+          >
+            <ConversationUpdateEmailPreview
+              :subject="subject"
+              :body-html="bodyHtml"
+              reply-to="facilitator@example.org"
+              scope-kind="project"
+              scope-href="/dev/project-page"
+              scope-label="River Commons"
+              :conversations="selectedConversations"
+              :audience-estimate="1842"
+            />
+          </div>
+        </template>
+      </ConversationUpdateComposerForm>
 
-      <ConversationUpdateEmailPreview
-        :subject="subject"
-        :body-html="bodyHtml"
-        reply-to="facilitator@example.org"
-        scope-kind="project"
-        scope-href="/dev/project-page"
-        scope-label="River Commons"
-        :conversations="selectedConversations"
-        :audience-estimate="1842"
-      />
+      <div
+        v-if="!$q.screen.lt.md"
+        class="conversation-updates-dev__preview"
+      >
+        <ConversationUpdateEmailPreview
+          :subject="subject"
+          :body-html="bodyHtml"
+          reply-to="facilitator@example.org"
+          scope-kind="project"
+          scope-href="/dev/project-page"
+          scope-label="River Commons"
+          :conversations="selectedConversations"
+          :audience-estimate="1842"
+        />
+      </div>
     </section>
 
     <ConversationUpdateHistoryList :records="historyRecords" />
@@ -117,6 +149,7 @@
 </template>
 
 <script setup lang="ts">
+import { useQuasar } from "quasar";
 import type { ManageOptOutItem } from "src/components/conversationUpdates/authFreePreferenceManager";
 import ConversationUpdateAuthFreePreferenceManager from "src/components/conversationUpdates/ConversationUpdateAuthFreePreferenceManager.vue";
 import ConversationUpdateComposerForm from "src/components/conversationUpdates/ConversationUpdateComposerForm.vue";
@@ -151,6 +184,7 @@ const { isActive } = usePageLayout({
   reducedWidth: false,
   addBottomPadding: true,
 });
+const $q = useQuasar();
 const { t: translateRecipientPreference } =
   useComponentI18n<EmailUpdatePreferencesTranslations>(
     emailUpdatePreferencesTranslations
@@ -266,6 +300,14 @@ const bodyPlainText = ref(
 );
 const contentConfirmed = ref(false);
 const onboardingConsent = ref(true);
+const onboardingScopeKind = ref<"no-project" | "project">("project");
+const onboardingScopeOptions: Array<{
+  label: string;
+  value: "no-project" | "project";
+}> = [
+  { label: "Project preference", value: "project" },
+  { label: "Conversation preference", value: "no-project" },
+];
 const hasSuccessfulTest = ref(false);
 const notice = ref<string>();
 const showPreferenceDialog = ref(false);

@@ -7,6 +7,7 @@ import {
 } from "@/shared-backend/schema.js";
 import {
     activeOwnerAuthorizationQuery,
+    buildConversationLinkUrl,
     createRecipientActions,
     deliveryUpdateIsExclusiveToConversation,
     testAttemptHasNoActiveSuppressions,
@@ -14,6 +15,30 @@ import {
 } from "./store.js";
 
 describe("scoped store predicates", () => {
+    it("links real project conversations through their project page", () => {
+        const url = buildConversationLinkUrl({
+            baseUrl: new URL("https://www.agoracitizen.app"),
+            conversationSlugId: "trees & parks",
+            route: { kind: "project", projectSlug: "green city" },
+        });
+
+        expect(url).toBe(
+            "https://www.agoracitizen.app/project/green%20city/conversation/trees%20%26%20parks/",
+        );
+    });
+
+    it("links conversations without a real project through their normal page", () => {
+        const url = buildConversationLinkUrl({
+            baseUrl: new URL("https://www.agoracitizen.app"),
+            conversationSlugId: "trees & parks",
+            route: { kind: "conversation" },
+        });
+
+        expect(url).toBe(
+            "https://www.agoracitizen.app/conversation/trees%20%26%20parks/",
+        );
+    });
+
     it("requires an update link to the target and forbids every other conversation link", () => {
         const db = drizzle.mock();
         const query = db
@@ -117,7 +142,7 @@ describe("scoped store predicates", () => {
         const result = createRecipientActions({
             siteBaseUrl: "https://www.agoracitizen.app",
             kind: "conversation_owner_copy",
-            scopeKind: "no_project",
+            participantPreferenceScope: "conversation",
         });
 
         expect(result.kind).toBe("conversation_owner_copy");
@@ -139,7 +164,7 @@ describe("scoped store predicates", () => {
         const result = createRecipientActions({
             siteBaseUrl: "https://www.agoracitizen.app",
             kind: "participant",
-            scopeKind: "listed_project",
+            participantPreferenceScope: "project",
         });
 
         expect(result.kind).toBe("participant");
@@ -147,5 +172,15 @@ describe("scoped store predicates", () => {
         expect(result.unsubscribeUrl).toContain(
             "/api/v1/conversation/email-update/action/one-click/",
         );
+    });
+
+    it("uses conversation actions for a listed conversation-scoped delivery", () => {
+        const result = createRecipientActions({
+            siteBaseUrl: "https://www.agoracitizen.app",
+            kind: "participant",
+            participantPreferenceScope: "conversation",
+        });
+
+        expect(result.actions.unsubscribeScope).toBe("conversation");
     });
 });

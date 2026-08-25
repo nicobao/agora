@@ -8,6 +8,11 @@ const api = vi.hoisted(() => ({
 }));
 const showNotifyMessage = vi.hoisted(() => vi.fn());
 
+vi.mock(
+  "src/utils/api/conversationUpdates/useConversationEmailUpdateQueries",
+  () => ({ useRemoveConversationEmailUpdateSummaryQueries: () => () => {} })
+);
+
 vi.mock("pinia", () => ({
   storeToRefs: (store: object) => store,
 }));
@@ -64,6 +69,7 @@ vi.mock("src/components/ui-library/ZKActionDialog.vue", () => ({
     props: {
       modelValue: { type: Boolean, required: true },
       actions: { type: Array, required: true },
+      dialogLabel: { type: String, required: true },
     },
     emits: ["update:modelValue", "actionSelected"],
     setup(props, { emit }) {
@@ -74,7 +80,10 @@ vi.mock("src/components/ui-library/ZKActionDialog.vue", () => ({
         const actions = z.array(testActionSchema).parse(props.actions);
         return h(
           "div",
-          { "data-testid": "action-drawer" },
+          {
+            "data-testid": "action-drawer",
+            "aria-label": props.dialogLabel,
+          },
           actions.map((action) =>
             h(
               "button",
@@ -147,16 +156,22 @@ describe("ProjectEmailUpdatesMenu", () => {
       await nextTick();
 
       expect(getButton(container, label).textContent).toBe(label);
+      expect(
+        container
+          .querySelector('[data-testid="action-drawer"]')
+          ?.getAttribute("aria-label")
+      ).toBe("projectActions");
       expect(container.querySelectorAll("button")).toHaveLength(2);
     }
   );
 
   it.each([
-    ["disabled", "enabled", "saveEnabled"],
-    ["enabled", "disabled", "saveDisabled"],
+    ["disabled", "enabled", false, "saveEnabled"],
+    ["disabled", "enabled", true, "preferenceSavedAndGlobalResumed"],
+    ["enabled", "disabled", false, "saveDisabled"],
   ])(
     "optimistically saves a %s to %s toggle and keeps the drawer open",
-    async (initialState, savedState, successMessage) => {
+    async (initialState, savedState, globalResumed, successMessage) => {
       const write = deferred();
       api.getProjectSummary.mockResolvedValue({
         success: true,
@@ -191,6 +206,7 @@ describe("ProjectEmailUpdatesMenu", () => {
           operation: "set_project_preference",
           projectSlug: "project-one",
           state: savedState,
+          globalResumed,
         },
       });
       await flushPromises();
@@ -273,6 +289,7 @@ describe("ProjectEmailUpdatesMenu", () => {
         operation: "set_project_preference",
         projectSlug: "project-one",
         state: "enabled",
+        globalResumed: false,
       },
     });
     await flushPromises();
