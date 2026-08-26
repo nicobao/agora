@@ -45,6 +45,7 @@ describe("conversation creation DTO", () => {
             success: true,
             noProjectEmailUpdates: {
                 canConfigure: true,
+                hasParticipantContactEmail: false,
                 scopeDefaultEnabled: false,
             },
             projectList: [
@@ -58,6 +59,7 @@ describe("conversation creation DTO", () => {
                     },
                     emailUpdates: {
                         canConfigure: true,
+                        hasParticipantContactEmail: true,
                         scopeDefaultEnabled: true,
                     },
                 },
@@ -68,16 +70,42 @@ describe("conversation creation DTO", () => {
             success: true,
             noProjectEmailUpdates: {
                 canConfigure: true,
+                hasParticipantContactEmail: false,
                 scopeDefaultEnabled: false,
             },
             projectList: [
                 {
                     emailUpdates: {
                         canConfigure: true,
+                        hasParticipantContactEmail: true,
                         scopeDefaultEnabled: true,
                     },
                 },
             ],
         });
     });
+});
+
+describe("conversation update DTO", () => {
+    it.each([undefined, null, true, false])(
+        "preserves the Email Updates override command %s",
+        (conversationEmailUpdateEnabledOverride) => {
+            const request = Dto.updateConversationRequest.parse({
+                conversationSlugId: "conv-one",
+                conversationTitle: "Updated conversation",
+                conversationBody: undefined,
+                isIndexed: true,
+                participationMode: "account_required",
+                multilingualSetting: {
+                    additionalLanguageCodes: [],
+                    dynamicTranslationEnabled: false,
+                },
+                conversationEmailUpdateEnabledOverride,
+            });
+
+            expect(request.conversationEmailUpdateEnabledOverride).toBe(
+                conversationEmailUpdateEnabledOverride,
+            );
+        },
+    );
 });

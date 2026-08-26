@@ -19,7 +19,10 @@ import {
 import { createI18n } from "vue-i18n";
 
 import { conversationUpdatesWorkspaceTranslations } from "./ConversationUpdatesWorkspace.i18n";
-import type { ConversationUpdateHistoryRecord } from "./conversationUpdateTypes";
+import {
+  CONVERSATION_UPDATE_NO_PROJECT_SCOPE_ID,
+  type ConversationUpdateHistoryRecord,
+} from "./conversationUpdateTypes";
 
 const api = vi.hoisted(() => ({
   estimateAudience: vi.fn(),
@@ -50,18 +53,54 @@ vi.mock("src/stores/onboarding/flow", () => ({
 }));
 vi.mock("vue-router", () => ({
   useRoute: () => ({ fullPath: "/email-updates/?tab=compose" }),
-  useRouter: () => ({ push: vi.fn() }),
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
 }));
 vi.mock("./ConversationUpdateComposerForm.vue", () => ({
   default: defineComponent({
     name: "ConversationUpdateComposerForm",
-    emits: ["test", "send", "update:contentConfirmed"],
-    setup(_props, { emit, slots }) {
+    props: {
+      selectedScopeId: { type: String, required: true },
+      selectedConversationIds: { type: Array, required: true },
+    },
+    emits: [
+      "test",
+      "send",
+      "update:contentConfirmed",
+      "update:selectedScopeId",
+      "update:selectedConversationIds",
+    ],
+    setup(props, { emit, slots }) {
       return () =>
         h("div", [
           h("div", "Composer fields"),
+          h(
+            "div",
+            { class: "composer-selection-stub" },
+            `${props.selectedScopeId}:${props.selectedConversationIds.join(",")}`
+          ),
           slots.preview?.(),
           h("div", { class: "composer-actions-stub" }, [
+            h(
+              "button",
+              {
+                onClick: () => {
+                  emit(
+                    "update:selectedScopeId",
+                    CONVERSATION_UPDATE_NO_PROJECT_SCOPE_ID
+                  );
+                  emit("update:selectedConversationIds", []);
+                },
+              },
+              "Choose No Project"
+            ),
+            h(
+              "button",
+              {
+                onClick: () =>
+                  emit("update:selectedConversationIds", ["standconv1"]),
+              },
+              "Choose standalone conversation"
+            ),
             h("button", { onClick: () => emit("test") }, "Send test"),
             h("button", { onClick: () => emit("send") }, "Open send"),
             h(
@@ -235,7 +274,7 @@ describe("ConversationUpdatesWorkspace", () => {
     await flushAudienceEstimate();
 
     expect(container.textContent).toContain(
-      "Mantén conectados a los participantes con el trabajo al que se unieron"
+      "Mantenga conectados a los participantes con el trabajo al que se unieron"
     );
     expect(container.textContent).toContain("Redactar");
     expect(container.textContent).toContain("Historial");
@@ -262,7 +301,7 @@ describe("ConversationUpdatesWorkspace", () => {
     await flushPromises();
 
     expect(showNotifyMessage).toHaveBeenCalledWith(
-      `Se solicitaron demasiados correos de prueba. Inténtalo de nuevo después de ${retryAt.toLocaleString("es")}.`
+      `Se solicitaron demasiados correos de prueba. Inténtelo de nuevo después de ${retryAt.toLocaleString("es")}.`
     );
   });
 
@@ -308,14 +347,14 @@ describe("ConversationUpdatesWorkspace", () => {
       .mockResolvedValueOnce(
         workspaceResponse({
           kind: "conversation",
-          conversationSlugId: "new-conversation",
+          conversationSlugId: "newconv001",
         })
       );
 
     mountComponent({ context });
     context.value = {
       kind: "conversation",
-      conversationSlugId: "new-conversation",
+      conversationSlugId: "newconv001",
     };
     await flushPromises();
     oldWorkspace.resolve(
@@ -327,7 +366,7 @@ describe("ConversationUpdatesWorkspace", () => {
     expect(api.listHistory).toHaveBeenCalledWith({
       context: {
         kind: "conversation",
-        conversationSlugId: "new-conversation",
+        conversationSlugId: "newconv001",
       },
       limit: 20,
     });
@@ -364,7 +403,7 @@ describe("ConversationUpdatesWorkspace", () => {
 
     context.value = {
       kind: "conversation",
-      conversationSlugId: "new-conversation",
+      conversationSlugId: "newconv001",
     };
     await flushPromises();
     stalePage.resolve({
@@ -401,7 +440,7 @@ describe("ConversationUpdatesWorkspace", () => {
 
     context.value = {
       kind: "conversation",
-      conversationSlugId: "new-conversation",
+      conversationSlugId: "newconv001",
     };
     await flushPromises();
     testResponse.resolve({
@@ -435,6 +474,36 @@ describe("ConversationUpdatesWorkspace", () => {
     await flushPromises();
 
     expect(api.sendTest).toHaveBeenCalledOnce();
+  });
+
+  it("shows test acceptance only as a temporary notification", async () => {
+    api.getWorkspace.mockResolvedValue(workspaceResponse({ kind: "global" }));
+    api.sendTest.mockResolvedValue({
+      success: true,
+      updateId: "00000000-0000-4000-8000-000000000010",
+      testAttemptId: "00000000-0000-4000-8000-000000000011",
+      status: "pending",
+    });
+    api.getTestStatus.mockResolvedValue({
+      success: true,
+      status: {
+        state: "provider_accepted",
+        providerAcceptedAt: new Date("2026-08-24T12:00:00.000Z"),
+      },
+    });
+
+    const { container } = mountComponent({
+      context: ref({ kind: "global" }),
+      initialTab: "compose",
+    });
+    await flushAudienceEstimate();
+    getButton(container, "Send test").click();
+    await new Promise((resolve) => window.setTimeout(resolve, 1_600));
+    await flushPromises();
+
+    expect(showNotifyMessage).toHaveBeenCalledWith(
+      "Test accepted for this exact email version."
+    );
   });
 
   it("submits only one final send while the request is pending", async () => {
@@ -503,7 +572,7 @@ describe("ConversationUpdatesWorkspace", () => {
     await flushPromises();
     context.value = {
       kind: "conversation",
-      conversationSlugId: "new-conversation",
+      conversationSlugId: "newconv001",
     };
     await flushAudienceEstimate();
 
@@ -513,7 +582,7 @@ describe("ConversationUpdatesWorkspace", () => {
         selection: {
           kind: "project",
           projectSlug: "workspace-project",
-          conversationSlugIds: ["new-conversation"],
+          conversationSlugIds: ["newconv001"],
         },
       },
       signal: expect.any(AbortSignal),
@@ -646,6 +715,68 @@ describe("ConversationUpdatesWorkspace", () => {
 
     expect(api.listHistory).not.toHaveBeenCalled();
   });
+
+  it("keeps No Project empty until one conversation is selected", async () => {
+    api.getWorkspace.mockResolvedValue(
+      workspaceResponseWithNoProject({
+        kind: "project",
+        projectSlug: "workspace-project",
+      })
+    );
+
+    const { container } = mountComponent({
+      context: ref({
+        kind: "project",
+        projectSlug: "workspace-project",
+      }),
+      initialTab: "compose",
+    });
+    await flushAudienceEstimate();
+
+    getButton(container, "Choose No Project").click();
+    await nextTick();
+    expect(
+      container.querySelector(".composer-selection-stub")?.textContent
+    ).toBe(`${CONVERSATION_UPDATE_NO_PROJECT_SCOPE_ID}:`);
+
+    api.estimateAudience.mockClear();
+    getButton(container, "Choose standalone conversation").click();
+    await flushAudienceEstimate();
+
+    expect(api.estimateAudience).toHaveBeenLastCalledWith({
+      request: {
+        selection: {
+          kind: "no_project",
+          conversationSlugId: "standconv1",
+        },
+      },
+      signal: expect.any(AbortSignal),
+    });
+  });
+
+  it("starts a project composer without selecting a conversation", async () => {
+    api.getWorkspace.mockResolvedValue({
+      ...workspaceResponseWithNoProject({
+        kind: "project",
+        projectSlug: "workspace-project",
+      }),
+      initialSelection: undefined,
+    });
+
+    const { container } = mountComponent({
+      context: ref({
+        kind: "project",
+        projectSlug: "workspace-project",
+      }),
+      initialTab: "compose",
+    });
+    await flushPromises();
+
+    expect(
+      container.querySelector(".composer-selection-stub")?.textContent
+    ).toBe("workspace-project:");
+    expect(api.estimateAudience).not.toHaveBeenCalled();
+  });
 });
 
 describe("conversationUpdatesWorkspaceTranslations", () => {
@@ -723,9 +854,7 @@ function workspaceResponse(
   const projectSlug =
     context.kind === "project" ? context.projectSlug : "workspace-project";
   const conversationSlugId =
-    context.kind === "conversation"
-      ? context.conversationSlugId
-      : "workspace-conversation";
+    context.kind === "conversation" ? context.conversationSlugId : "workconv01";
   return {
     success: true as const,
     resolvedContext: context,
@@ -748,6 +877,32 @@ function workspaceResponse(
             participationMode: "account_required" as const,
             estimatedEligibleRecipientCount: 10,
             sendingEnabled: true,
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function workspaceResponseWithNoProject(
+  context: ConversationEmailUpdateWorkspaceRequest["context"]
+) {
+  const response = workspaceResponse(context);
+  return {
+    ...response,
+    scopes: [
+      ...response.scopes,
+      {
+        kind: "no_project" as const,
+        title: "No Project",
+        conversations: [
+          {
+            conversationSlugId: "standconv1",
+            title: "Standalone conversation",
+            participationMode: "account_required" as const,
+            estimatedEligibleRecipientCount: 5,
+            sendingEnabled: true,
+            participantContactEmail: "standalone@example.com",
           },
         ],
       },

@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { resolveConversationEmailPreference } from "@/shared-backend/conversationEmailUpdatePreference.js";
 import {
     decideConversationEmailFinalSend,
     decideConversationEmailTestRateLimit,
+    isConversationEmailUpdateConfigured,
     resolveConversationEmailOnboardingAction,
     resolveConversationEmailParticipantPreferenceScope,
-    resolveConversationEmailPreference,
     resolveConversationEmailSendingAvailability,
     type ConversationEmailTestedBasis,
 } from "./conversationEmailUpdatePolicy.js";
@@ -29,7 +30,7 @@ describe("resolveConversationEmailPreference", () => {
         ).toBe(true);
     });
 
-    it("requires the applicable explicit scope choice", () => {
+    it("uses an explicit conversation choice before the project fallback", () => {
         expect(
             resolveConversationEmailPreference({
                 globalPaused: false,
@@ -37,7 +38,7 @@ describe("resolveConversationEmailPreference", () => {
                 conversationEnabled: true,
                 scopeKind: "project",
             }),
-        ).toBe(false);
+        ).toBe(true);
         expect(
             resolveConversationEmailPreference({
                 globalPaused: false,
@@ -46,6 +47,14 @@ describe("resolveConversationEmailPreference", () => {
                 scopeKind: "project",
             }),
         ).toBe(false);
+        expect(
+            resolveConversationEmailPreference({
+                globalPaused: false,
+                projectEnabled: false,
+                conversationEnabled: true,
+                scopeKind: "project",
+            }),
+        ).toBe(true);
         expect(
             resolveConversationEmailPreference({
                 globalPaused: false,
@@ -129,6 +138,12 @@ describe("resolveConversationEmailParticipantPreferenceScope", () => {
                     conversationOverrideEnabled,
                 }),
             ).toBe(expected);
+            expect(
+                isConversationEmailUpdateConfigured({
+                    projectDefaultEnabled,
+                    conversationOverrideEnabled,
+                }),
+            ).toBe(expected !== undefined);
         },
     );
 });

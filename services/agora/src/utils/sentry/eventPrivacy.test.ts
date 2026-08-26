@@ -230,6 +230,134 @@ describe("Meta iOS bridge event detection", () => {
   });
 });
 
+describe("injected document stack overflow detection", () => {
+  function createStackOverflowEvent({
+    filenames,
+    functions = undefined,
+    value = "Maximum call stack size exceeded.",
+    includeAdditionalException = false,
+  }: {
+    filenames?: Array<string | undefined>;
+    functions?: string[];
+    value?: string;
+    includeAdditionalException?: boolean;
+  }): Event {
+    return {
+      exception: {
+        values: [
+          {
+            type: "RangeError",
+            value,
+            ...(filenames === undefined
+              ? {}
+              : {
+                  stacktrace: {
+                    frames: filenames.map((filename, index) => ({
+                      filename,
+                      function:
+                        functions?.[index] ?? (index % 2 === 0 ? "Ik" : "Gk"),
+                    })),
+                  },
+                }),
+          },
+          ...(includeAdditionalException
+            ? [{ type: "Error", value: "Application failure" }]
+            : []),
+        ],
+      },
+    };
+  }
+
+  it("ignores an overflow attributed entirely to one host document", () => {
+    expect(
+      shouldIgnoreSentryEvent(
+        createStackOverflowEvent({
+          filenames: Array.from(
+            { length: 40 },
+            () => "app:///conversation/example/"
+          ),
+        })
+      )
+    ).toBe(true);
+  });
+
+  it("accepts the browser variant without a trailing period", () => {
+    expect(
+      shouldIgnoreSentryEvent(
+        createStackOverflowEvent({
+          filenames: Array.from({ length: 20 }, () => "/conversation/example/"),
+          value: "Maximum call stack size exceeded",
+        })
+      )
+    ).toBe(true);
+  });
+
+  it.each(["/assets/application.js", "app:///src/App.vue", "src/store.ts"])(
+    "retains an overflow attributed to application source %s",
+    (applicationFilename) => {
+      expect(
+        shouldIgnoreSentryEvent(
+          createStackOverflowEvent({
+            filenames: Array.from({ length: 40 }, () => applicationFilename),
+          })
+        )
+      ).toBe(false);
+    }
+  );
+
+  it("retains an overflow attributed to different documents", () => {
+    expect(
+      shouldIgnoreSentryEvent(
+        createStackOverflowEvent({
+          filenames: Array.from({ length: 40 }, (_, index) =>
+            index === 20 ? "/conversation/two/" : "/conversation/one/"
+          ),
+        })
+      )
+    ).toBe(false);
+  });
+
+  it("retains short, partially attributed, and non-signature stacks", () => {
+    const documentFilename = "/conversation/example/";
+    expect(
+      shouldIgnoreSentryEvent(
+        createStackOverflowEvent({
+          filenames: Array.from({ length: 19 }, () => documentFilename),
+        })
+      )
+    ).toBe(false);
+    expect(
+      shouldIgnoreSentryEvent(
+        createStackOverflowEvent({
+          filenames: Array.from({ length: 40 }, (_, index) =>
+            index === 20 ? undefined : documentFilename
+          ),
+        })
+      )
+    ).toBe(false);
+    expect(
+      shouldIgnoreSentryEvent(
+        createStackOverflowEvent({
+          filenames: Array.from({ length: 40 }, () => documentFilename),
+          functions: Array.from({ length: 40 }, () => "renderApplication"),
+        })
+      )
+    ).toBe(false);
+  });
+
+  it("retains stackless and mixed events", () => {
+    expect(shouldIgnoreSentryEvent(createStackOverflowEvent({}))).toBe(false);
+    expect(
+      shouldIgnoreSentryEvent(
+        createStackOverflowEvent({
+          filenames: ["/conversation/example/"],
+          includeAdditionalException: true,
+        })
+      )
+    ).toBe(false);
+  });
+});
+
 describe("ignored Sentry events", () => {
   it.each([
     "ResizeObserver loop limit exceeded",
@@ -237,6 +365,32 @@ describe("ignored Sentry events", () => {
   ])("ignores known benign error: %s", (value) => {
     expect(
       shouldIgnoreSentryEvent({ exception: { values: [{ value }] } })
+    ).toBe(true);
+  });
+
+  it("ignores a ResizeObserver error with a synthetic document frame", () => {
+    expect(
+      shouldIgnoreSentryEvent({
+        exception: {
+          values: [
+            {
+              type: "Error",
+              value: "ResizeObserver loop limit exceeded",
+              stacktrace: {
+                frames: [
+                  {
+                    filename: "/settings/languages/display-language/",
+                    function: "?",
+                    lineno: 0,
+                    colno: 0,
+                    in_app: true,
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      })
     ).toBe(true);
   });
 
@@ -255,19 +409,43 @@ describe("ignored Sentry events", () => {
     ).toBe(false);
   });
 
-  it("retains mixed and in-app ResizeObserver events", () => {
+  it.each([
+    {
+      name: "a bundled application frame",
+      frame: {
+        filename: "/assets/application.js",
+        function: "resizeLayout",
+        lineno: 42,
+        colno: 5,
+        in_app: true,
+      },
+    },
+    {
+      name: "an inline application frame",
+      frame: {
+        filename: "/settings/languages/display-language/",
+        function: "resizeLayout",
+        lineno: 1,
+        colno: 5,
+        in_app: true,
+      },
+    },
+  ])("retains a ResizeObserver error with $name", ({ frame }) => {
     expect(
       shouldIgnoreSentryEvent({
         exception: {
           values: [
             {
               value: "ResizeObserver loop limit exceeded",
-              stacktrace: { frames: [{ in_app: true }] },
+              stacktrace: { frames: [frame] },
             },
           ],
         },
       })
     ).toBe(false);
+  });
+
+  it("retains mixed ResizeObserver events", () => {
     expect(
       shouldIgnoreSentryEvent({
         exception: {

@@ -21,6 +21,10 @@ export function isChunkLoadError(error: unknown): error is Error {
   );
 }
 
+export function hasChunkErrorRecoveryStarted(error: unknown): boolean {
+  return error instanceof Error && recoveryStartedAtByError.has(error);
+}
+
 /**
  * Attempts recovery from a chunk load error by reloading the page.
  * Coalesces duplicate delivery of the same error while navigation starts,
@@ -49,7 +53,6 @@ export function reloadForChunkError({
     ) {
       return "pending";
     }
-    recoveryStartedAtByError.delete(error);
   }
 
   if (!navigator.onLine) {
@@ -72,11 +75,11 @@ export function reloadForChunkError({
     return "blocked";
   }
 
-  recoveryStartedAtByError.set(error, now);
   if (navigateTo) {
     window.location.href = navigateTo;
   } else {
     window.location.reload();
   }
+  recoveryStartedAtByError.set(error, now);
   return "started";
 }

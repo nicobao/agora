@@ -8,6 +8,7 @@ import { z } from "zod";
 const optionSchema = z.object({
   label: z.string(),
   caption: z.string(),
+  disabled: z.boolean().optional(),
 });
 
 vi.mock("src/components/ui-library/ZKSearchableBottomSheetSelect.vue", () => ({
@@ -20,19 +21,40 @@ vi.mock("src/components/ui-library/ZKSearchableBottomSheetSelect.vue", () => ({
       selectAllLabel: { type: String, default: "" },
       clearAllLabel: { type: String, default: "" },
       options: { type: Array, required: true },
+      required: { type: Boolean, default: false },
+      multiple: { type: Boolean, default: false },
+      showBulkActions: { type: Boolean, default: false },
     },
     setup(props) {
       return () => {
         const options = z.array(optionSchema).parse(props.options);
-        return h("section", [
-          props.label,
-          props.placeholder,
-          props.dialogTitle,
-          props.dialogSubtitle,
-          props.selectAllLabel,
-          props.clearAllLabel,
-          ...options.flatMap((option) => [option.label, option.caption]),
-        ]);
+        return h(
+          "section",
+          {
+            "data-label": `${props.label}${props.required ? " *" : ""}`,
+            "data-required": String(props.required),
+            "data-multiple": String(props.multiple),
+            "data-show-bulk-actions": String(props.showBulkActions),
+          },
+          [
+            `${props.label}${props.required ? " *" : ""}`,
+            props.placeholder,
+            props.dialogTitle,
+            props.dialogSubtitle,
+            props.selectAllLabel,
+            props.clearAllLabel,
+            ...options.map((option) =>
+              h(
+                "div",
+                {
+                  "data-option": option.label,
+                  "data-disabled": String(option.disabled ?? false),
+                },
+                [option.label, option.caption]
+              )
+            ),
+          ]
+        );
       };
     },
   }),
@@ -58,6 +80,15 @@ describe("ConversationUpdateScopeFields", () => {
     });
     const text = container.textContent ?? "";
 
+    expect(container.querySelector('[data-label="Project *"]')).not.toBeNull();
+    expect(
+      container.querySelector('[data-label="Included conversations *"]')
+    ).not.toBeNull();
+    expect(
+      container
+        .querySelector('[data-label="Project *"]')
+        ?.getAttribute("data-required")
+    ).toBe("true");
     expect(text).toContain("Choose a project");
     expect(text).toContain("1 eligible conversation");
     expect(text).not.toContain("1 eligible conversations");
@@ -84,16 +115,51 @@ describe("ConversationUpdateScopeFields", () => {
     expect(text).not.toContain("Choose a project");
     expect(text).not.toContain("eligible conversations");
   });
+
+  it("uses single selection without bulk actions for No Project", () => {
+    const container = mountScopeFields({
+      locale: "en",
+      participantCount: 2,
+      selectedScopeId: "without-project",
+    });
+    const conversationSelect = container.querySelector(
+      '[data-label="Included conversations *"]'
+    );
+
+    expect(conversationSelect?.getAttribute("data-multiple")).toBe("false");
+    expect(conversationSelect?.getAttribute("data-show-bulk-actions")).toBe(
+      "false"
+    );
+  });
+
+  it("keeps a scope visible but disabled when none of its conversations can send", () => {
+    const container = mountScopeFields({
+      locale: "en",
+      participantCount: 2,
+      selectedScopeId: "without-project",
+      updatesDisabledConversationIds: ["three"],
+    });
+    const noProjectOption = container.querySelector(
+      '[data-option="Without Project"]'
+    );
+
+    expect(noProjectOption?.getAttribute("data-disabled")).toBe("true");
+    expect(noProjectOption?.textContent).toContain(
+      "0 eligible conversations without a project"
+    );
+  });
 });
 
 function mountScopeFields({
   locale,
   participantCount,
   selectedScopeId,
+  updatesDisabledConversationIds = [],
 }: {
   locale: SupportedDisplayLanguageCodes;
   participantCount: number;
   selectedScopeId: "project-one" | "without-project";
+  updatesDisabledConversationIds?: readonly string[];
 }): HTMLElement {
   const container = document.createElement("div");
   container.dir = locale === "ar" ? "rtl" : "ltr";
@@ -122,7 +188,7 @@ function mountScopeFields({
         conversations: [conversation({ id: "three", participantCount })],
       },
     ],
-    updatesDisabledConversationIds: [],
+    updatesDisabledConversationIds,
     disabled: false,
     selectedScopeId,
     selectedConversationIds: [],

@@ -1,8 +1,19 @@
+import type { ConversationEmailUpdatePreferenceScope } from "@/shared-backend/conversationEmailUpdatePreference.js";
+
 export type ConversationEmailUpdateScopeKind = "project" | "no_project";
 
 export type ConversationEmailParticipantPreferenceScope =
-    | "project"
-    | "conversation";
+    ConversationEmailUpdatePreferenceScope;
+
+export function isConversationEmailUpdateConfigured({
+    projectDefaultEnabled,
+    conversationOverrideEnabled,
+}: {
+    projectDefaultEnabled: boolean;
+    conversationOverrideEnabled: boolean | null | undefined;
+}): boolean {
+    return conversationOverrideEnabled ?? projectDefaultEnabled;
+}
 
 export function resolveConversationEmailParticipantPreferenceScope({
     scopeKind,
@@ -13,29 +24,16 @@ export function resolveConversationEmailParticipantPreferenceScope({
     projectDefaultEnabled: boolean;
     conversationOverrideEnabled: boolean | null | undefined;
 }): ConversationEmailParticipantPreferenceScope | undefined {
-    const configuredEnabled =
-        conversationOverrideEnabled ?? projectDefaultEnabled;
-    if (!configuredEnabled) return undefined;
+    if (
+        !isConversationEmailUpdateConfigured({
+            projectDefaultEnabled,
+            conversationOverrideEnabled,
+        })
+    ) {
+        return undefined;
+    }
     if (scopeKind === "no_project") return "conversation";
     return projectDefaultEnabled ? "project" : "conversation";
-}
-
-export interface ConversationEmailPreferenceState {
-    globalPaused: boolean;
-    projectEnabled: boolean | undefined;
-    conversationEnabled: boolean | undefined;
-    scopeKind: ConversationEmailUpdateScopeKind;
-}
-
-export function resolveConversationEmailPreference({
-    globalPaused,
-    projectEnabled,
-    conversationEnabled,
-    scopeKind,
-}: ConversationEmailPreferenceState): boolean {
-    if (globalPaused) return false;
-    if (scopeKind === "no_project") return conversationEnabled === true;
-    return projectEnabled === true && conversationEnabled !== false;
 }
 
 export type ConversationEmailSendingUnavailableReason =

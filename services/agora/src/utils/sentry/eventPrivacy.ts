@@ -3,6 +3,7 @@ import {
   containsEmailUpdateRecipientActionPath,
   isEmailUpdateRecipientActionPath,
 } from "src/utils/privacy/emailUpdateRecipientPath";
+import { isMaximumCallStackException } from "src/utils/sentry/stackOverflow";
 import { z } from "zod";
 
 type SentryTransactionEvent = Event & { type: "transaction" };
@@ -17,6 +18,8 @@ const CEF_SHARP_CRAWLER_ERROR =
 const META_INJECTED_PAGE_HIDE_ERROR =
   "undefined is not an object (evaluating 'window.webkit.messageHandlers')";
 const JAVASCRIPT_ASSET_PATH = /\.(?:c|m)?js(?:[?#]|$)/i;
+const APPLICATION_SOURCE_PATH = /\.(?:vue|[cm]?[jt]sx?)(?:[?#]|$)/i;
+const MIN_INJECTED_STACK_OVERFLOW_FRAMES = 20;
 const RESIZE_OBSERVER_ERROR =
   /^ResizeObserver loop (?:limit exceeded|completed with undelivered notifications\.)$/;
 const httpMethodSchema = z.enum([
@@ -89,23 +92,29 @@ const safeContextsSchema = z.object({
     .optional(),
 });
 
-function isSingleNonAppExceptionMatching({
-  event,
-  pattern,
-}: {
-  event: Event;
-  pattern: RegExp;
-}): boolean {
+function isBenignResizeObserverEvent(event: Event): boolean {
   const exceptions = event.exception?.values;
   if (exceptions?.length !== 1) {
     return false;
   }
   const exception = exceptions[0];
-  return (
-    exception?.value !== undefined &&
-    pattern.test(exception.value) &&
-    exception.stacktrace?.frames?.some((frame) => frame.in_app === true) !==
-      true
+  if (
+    exception?.value === undefined ||
+    !RESIZE_OBSERVER_ERROR.test(exception.value)
+  ) {
+    return false;
+  }
+
+  const inAppFrames =
+    exception.stacktrace?.frames?.filter((frame) => frame.in_app === true) ??
+    [];
+  return inAppFrames.every(
+    (frame) =>
+      frame.filename !== undefined &&
+      !JAVASCRIPT_ASSET_PATH.test(frame.filename) &&
+      frame.function === "?" &&
+      frame.lineno === 0 &&
+      frame.colno === 0
   );
 }
 
@@ -173,11 +182,57 @@ function isMetaInjectedPageHideError(event: Event): boolean {
   return true;
 }
 
+function isInjectedDocumentStackOverflow(event: Event): boolean {
+  const exceptions = event.exception?.values;
+  if (exceptions?.length !== 1) {
+    return false;
+  }
+
+  const exception = exceptions[0];
+  if (exception === undefined || !isMaximumCallStackException(exception)) {
+    return false;
+  }
+
+  const frames = exception.stacktrace?.frames;
+  if (
+    frames === undefined ||
+    frames.length < MIN_INJECTED_STACK_OVERFLOW_FRAMES
+  ) {
+    return false;
+  }
+
+  const documentFilename = frames[0]?.filename;
+  if (
+    documentFilename === undefined ||
+    APPLICATION_SOURCE_PATH.test(documentFilename)
+  ) {
+    return false;
+  }
+
+  let previousFunction: "Ik" | "Gk" | undefined;
+  for (const frame of frames) {
+    const currentFunction = frame.function;
+    if (
+      frame.filename !== documentFilename ||
+      (currentFunction !== "Ik" && currentFunction !== "Gk") ||
+      currentFunction === previousFunction
+    ) {
+      return false;
+    }
+    previousFunction = currentFunction;
+  }
+
+  // This long two-function cycle is a stable injected-script signature seen
+  // across unrelated applications; neither function exists in Agora sources.
+  return true;
+}
+
 export function shouldIgnoreSentryEvent(event: Event): boolean {
   return (
     isCefSharpCrawlerEvent(event) ||
     isMetaInjectedPageHideError(event) ||
-    isSingleNonAppExceptionMatching({ event, pattern: RESIZE_OBSERVER_ERROR })
+    isInjectedDocumentStackOverflow(event) ||
+    isBenignResizeObserverEvent(event)
   );
 }
 

@@ -90,7 +90,6 @@ import {
     canConfigureConversationEmailUpdatesForOrganization,
     getConversationCreateProjectOptions,
     getProjectLanguageSettings,
-    hasProjectParticipantContactEmail,
     resolveConversationCreateTargetResult,
 } from "@/service/projectAccess.js";
 import {
@@ -232,6 +231,10 @@ import {
     updateOrganizationLocalization,
     updateOrganizationSlug,
 } from "./service/administrator/organization.js";
+import {
+    getAdminNoProjectEmailUpdates,
+    updateAdminNoProjectEmailUpdates,
+} from "./service/administrator/organizationEmailUpdates.js";
 import {
     archiveProject,
     createProject,
@@ -520,6 +523,7 @@ server.setErrorHandler((error: FastifyError, _request, reply) => {
 const db = await createDb(config, log);
 const conversationEmailUpdateService = createConversationEmailUpdateService({
     db,
+    baseImageServiceUrl: config.IMAGES_SERVICE_BASE_URL,
     sendingEnabled:
         config.CONVERSATION_EMAIL_UPDATES_ENABLED &&
         !config.CONVERSATION_EMAIL_UPDATES_KILL_SWITCH,
@@ -3889,32 +3893,17 @@ server.after(() => {
             }
             if (
                 createConversationRequest.conversationEmailUpdateEnabledOverride !==
-                undefined
+                    undefined &&
+                !(await canConfigureConversationEmailUpdatesForOrganization({
+                    db: getPrimaryDatabase(db),
+                    userId: deviceStatus.userId,
+                    organizationId: createTargetResult.target.organizationId,
+                    now: nowZeroMs(),
+                }))
             ) {
-                const canConfigureEmailUpdates =
-                    await canConfigureConversationEmailUpdatesForOrganization({
-                        db,
-                        userId: deviceStatus.userId,
-                        organizationId:
-                            createTargetResult.target.organizationId,
-                        now: nowZeroMs(),
-                    });
-                if (!canConfigureEmailUpdates) {
-                    throw server.httpErrors.forbidden(
-                        "Missing conversation_email_update access",
-                    );
-                }
-                if (
-                    createConversationRequest.conversationEmailUpdateEnabledOverride &&
-                    !(await hasProjectParticipantContactEmail({
-                        db,
-                        projectId: createTargetResult.target.projectId,
-                    }))
-                ) {
-                    throw server.httpErrors.badRequest(
-                        "Email Updates require a participant contact email",
-                    );
-                }
+                throw server.httpErrors.forbidden(
+                    "Missing conversation_email_update access",
+                );
             }
             if (
                 createConversationRequest.languageSettingsSource ===
@@ -5783,6 +5772,41 @@ server.after(() => {
 
     server.withTypeProvider<ZodTypeProvider>().route({
         method: "POST",
+        url: `/api/${apiVersion}/administrator/organization/no-project-email-updates/get`,
+        schema: {
+            body: Dto.getAdminNoProjectEmailUpdatesRequest,
+            response: { 200: Dto.getAdminNoProjectEmailUpdatesResponse },
+        },
+        handler: async (request) => {
+            await requireSiteOrgAdmin(request);
+            return await getAdminNoProjectEmailUpdates({
+                db: getPrimaryDatabase(db),
+                organizationSlug: request.body.organizationSlug,
+                now: nowZeroMs(),
+            });
+        },
+    });
+
+    server.withTypeProvider<ZodTypeProvider>().route({
+        method: "POST",
+        url: `/api/${apiVersion}/administrator/organization/no-project-email-updates/update`,
+        schema: {
+            body: Dto.updateAdminNoProjectEmailUpdatesRequest,
+            response: { 200: Dto.updateAdminNoProjectEmailUpdatesResponse },
+        },
+        handler: async (request) => {
+            const userId = await requireSiteOrgAdmin(request);
+            return await updateAdminNoProjectEmailUpdates({
+                db,
+                userId,
+                request: request.body,
+                now: nowZeroMs(),
+            });
+        },
+    });
+
+    server.withTypeProvider<ZodTypeProvider>().route({
+        method: "POST",
         url: `/api/${apiVersion}/administrator/organization/create-organization`,
         schema: {
             body: Dto.createOrganizationRequest,
@@ -6778,7 +6802,7 @@ server.after(() => {
         schema: {
             body: Dto.conversationEmailUpdateWorkspaceRequest,
             response: {
-                200: Dto.conversationEmailUpdateWorkspaceResponse,
+                200: Dto.conversationEmailUpdateWorkspaceOpenApiResponse,
             },
         },
         handler: async (request) => {
@@ -6830,7 +6854,7 @@ server.after(() => {
         method: "POST",
         url: `/api/${apiVersion}/conversation/email-update/audience/estimate`,
         schema: {
-            body: Dto.conversationEmailUpdateAudienceEstimateRequest,
+            body: Dto.conversationEmailUpdateAudienceEstimateOpenApiRequest,
             response: {
                 200: Dto.conversationEmailUpdateAudienceEstimateResponse,
             },
@@ -6839,7 +6863,10 @@ server.after(() => {
             const userId = await requireAuthenticatedUserId(request);
             return conversationEmailUpdateService.estimateAudience({
                 userId,
-                request: request.body,
+                request:
+                    Dto.conversationEmailUpdateAudienceEstimateRequest.parse(
+                        request.body,
+                    ),
             });
         },
     });
@@ -6848,7 +6875,7 @@ server.after(() => {
         method: "POST",
         url: `/api/${apiVersion}/conversation/email-update/test/send`,
         schema: {
-            body: Dto.conversationEmailUpdateSendTestRequest,
+            body: Dto.conversationEmailUpdateSendTestOpenApiRequest,
             response: {
                 200: Dto.conversationEmailUpdateSendTestResponse,
             },
@@ -6857,7 +6884,9 @@ server.after(() => {
             const userId = await requireAuthenticatedUserId(request);
             return conversationEmailUpdateService.sendTest({
                 userId,
-                request: request.body,
+                request: Dto.conversationEmailUpdateSendTestRequest.parse(
+                    request.body,
+                ),
             });
         },
     });
@@ -6928,6 +6957,24 @@ server.after(() => {
         handler: async (request) => {
             const userId = await requireAuthenticatedUserId(request);
             return conversationEmailUpdateService.updatePreference({
+                userId,
+                request: request.body,
+            });
+        },
+    });
+
+    server.withTypeProvider<ZodTypeProvider>().route({
+        method: "POST",
+        url: `/api/${apiVersion}/conversation/email-update/preferences/conversations/get`,
+        schema: {
+            body: Dto.conversationEmailUpdatePreferenceConversationsRequest,
+            response: {
+                200: Dto.conversationEmailUpdatePreferenceConversationsResponse,
+            },
+        },
+        handler: async (request) => {
+            const userId = await requireAuthenticatedUserId(request);
+            return conversationEmailUpdateService.getPreferenceConversations({
                 userId,
                 request: request.body,
             });

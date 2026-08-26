@@ -62,20 +62,17 @@
         :updates-disabled-conversation-ids="[]"
         :test-pending="false"
         :send-pending="false"
-        :notice="notice"
         :has-successful-test="hasSuccessfulTest"
-        :audience-estimate="1842"
-        :audience-estimate-available="true"
+        :audience-estimate-state="{
+          kind: 'ready',
+          eligibleParticipantCount: 1842,
+          ownerCopyCount: 1,
+        }"
         test-destination-email="facilitator@example.org"
-        :related-conversation-owner-count="1"
         @test="simulateTest"
-        @send="simulateSend"
       >
         <template #preview>
-          <div
-            v-if="$q.screen.lt.md"
-            class="conversation-updates-dev__preview"
-          >
+          <div v-if="$q.screen.lt.md" class="conversation-updates-dev__preview">
             <ConversationUpdateEmailPreview
               :subject="subject"
               :body-html="bodyHtml"
@@ -90,10 +87,7 @@
         </template>
       </ConversationUpdateComposerForm>
 
-      <div
-        v-if="!$q.screen.lt.md"
-        class="conversation-updates-dev__preview"
-      >
+      <div v-if="!$q.screen.lt.md" class="conversation-updates-dev__preview">
         <ConversationUpdateEmailPreview
           :subject="subject"
           :body-html="bodyHtml"
@@ -309,7 +303,6 @@ const onboardingScopeOptions: Array<{
   { label: "Conversation preference", value: "no-project" },
 ];
 const hasSuccessfulTest = ref(false);
-const notice = ref<string>();
 const showPreferenceDialog = ref(false);
 const preferenceEnabled = ref(false);
 const selectedConversations = computed(() => {
@@ -342,11 +335,6 @@ const actionContext: ContentActionContext = {
 
 function simulateTest(): void {
   hasSuccessfulTest.value = true;
-  notice.value = "Simulated test delivered successfully. No request was sent.";
-}
-
-function simulateSend(): void {
-  notice.value = "Simulated review completed. No update was queued or sent.";
 }
 
 function simulateRecipientOptOut(item: ManageOptOutItem): void {

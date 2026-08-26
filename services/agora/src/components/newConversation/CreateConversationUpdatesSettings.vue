@@ -16,6 +16,7 @@
             v-for="option in settingOptions"
             :key="option.id"
             clickable
+            :disable="!option.enabled"
             @click="selectSetting(option.value)"
           >
             <q-item-section>
@@ -27,6 +28,7 @@
                 :model-value="settingMode"
                 :val="option.id"
                 :aria-label="option.title"
+                :disable="!option.enabled"
               />
             </q-item-section>
           </q-item>
@@ -46,12 +48,18 @@ import {
   type CreateConversationUpdatesSettingsTranslations,
   createConversationUpdatesSettingsTranslations,
 } from "./CreateConversationUpdatesSettings.i18n";
+import {
+  canSelectConversationUpdatesSetting,
+  shouldShowConversationUpdatesSettings,
+} from "./createConversationUpdatesSettingsLogic";
 
 const props = defineProps<{
   scopeKind: "project" | "no-project";
   projectTitle: string | undefined;
   scopeDefaultEnabled: boolean;
   canConfigure: boolean;
+  hasParticipantContactEmail: boolean;
+  mode: "create" | "edit";
 }>();
 
 type SettingMode = "inherit" | "off" | "on";
@@ -60,6 +68,7 @@ interface SettingOption {
   title: string;
   description: string;
   value: boolean | undefined;
+  enabled: boolean;
 }
 
 const override = defineModel<boolean | undefined>({ required: true });
@@ -68,7 +77,13 @@ const { t } = useComponentI18n<CreateConversationUpdatesSettingsTranslations>(
   createConversationUpdatesSettingsTranslations
 );
 
-const shouldShow = computed(() => props.canConfigure);
+const shouldShow = computed(() =>
+  shouldShowConversationUpdatesSettings({
+    canConfigure: props.canConfigure,
+    hasParticipantContactEmail: props.hasParticipantContactEmail,
+    mode: props.mode,
+  })
+);
 const displayEnabled = computed(
   () => override.value ?? props.scopeDefaultEnabled
 );
@@ -98,29 +113,57 @@ const settingOptions = computed<readonly SettingOption[]>(() => {
     defaultValue,
     scopeLabel,
   });
+  const inheritEnabled = canSelectConversationUpdatesSetting({
+    hasParticipantContactEmail: props.hasParticipantContactEmail,
+    scopeDefaultEnabled: props.scopeDefaultEnabled,
+    value: undefined,
+  });
+  const onEnabled = canSelectConversationUpdatesSetting({
+    hasParticipantContactEmail: props.hasParticipantContactEmail,
+    scopeDefaultEnabled: props.scopeDefaultEnabled,
+    value: true,
+  });
   return [
     {
       id: "inherit",
       title: t("useDefault", { source: defaultSource }),
-      description: t("inheritsDescription", { defaultValue, scopeLabel }),
+      description: inheritEnabled
+        ? t("inheritsDescription", { defaultValue, scopeLabel })
+        : t("missingContact"),
       value: undefined,
+      enabled: inheritEnabled,
     },
     {
       id: "on",
       title: t("on"),
-      description: overrideDescription,
+      description: onEnabled ? overrideDescription : t("missingContact"),
       value: true,
+      enabled: onEnabled,
     },
     {
       id: "off",
       title: t("off"),
       description: overrideDescription,
       value: false,
+      enabled: canSelectConversationUpdatesSetting({
+        hasParticipantContactEmail: props.hasParticipantContactEmail,
+        scopeDefaultEnabled: props.scopeDefaultEnabled,
+        value: false,
+      }),
     },
   ];
 });
 
 function selectSetting(value: boolean | undefined): void {
+  if (
+    !canSelectConversationUpdatesSetting({
+      hasParticipantContactEmail: props.hasParticipantContactEmail,
+      scopeDefaultEnabled: props.scopeDefaultEnabled,
+      value,
+    })
+  ) {
+    return;
+  }
   override.value = value;
   showDialog.value = false;
 }

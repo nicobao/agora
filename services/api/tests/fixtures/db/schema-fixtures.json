@@ -40,5 +40,37 @@
         "opinion_moderation",
         "analysis_snapshot_opinion",
         "conversation_view_snapshot"
+    ],
+    "conversation-email-update-creation-authorization": [
+        "user",
+        "organization",
+        "organization_membership",
+        "organization_membership_all_project_capability",
+        "premium_feature_entitlement",
+        "project",
+        "project_organization_ownership",
+        "project_contact"
+    ],
+    "default-project-provisioning": [
+        "organization",
+        "project",
+        "project_content",
+        "project_organization_ownership"
+    ],
+    "conversation-email-update-preference-pagination": [
+        "user",
+        "organization",
+        "organization_membership",
+        "project",
+        "project_content",
+        "project_contact",
+        "project_organization_ownership",
+        "premium_feature_entitlement",
+        "polis_conversation_config",
+        "conversation",
+        "conversation_content",
+        "conversation_email_update_scope_safety_block",
+        "conversation_email_update_user_project_preference",
+        "conversation_email_update_user_conversation_preference"
     ]
 }

@@ -288,17 +288,55 @@ describe("PostMetadata email update actions", () => {
       ).toBe("true");
       expect(
         container.querySelectorAll('[data-testid="action-drawer"] button')
-      ).toHaveLength(2);
+      ).toHaveLength(3);
     }
   );
 
+  it("hides participant actions when the summary has no preference", async () => {
+    api.getConversationSummary.mockResolvedValue({
+      success: true,
+      authoringAction: "compose",
+    });
+
+    const container = mountMetadata();
+    getMenuButton(container).click();
+    await flushPromises();
+
+    expect(getButton(container, "manageEmailUpdatesLabel").textContent).toBe(
+      "manageEmailUpdatesLabel"
+    );
+    expect(findButton(container, "receiveEmailUpdatesLabel")).toBeUndefined();
+    expect(findButton(container, "manageMyEmailUpdatesLabel")).toBeUndefined();
+  });
+
+  it("opens the history tab for a history-only owner action", async () => {
+    api.getConversationSummary.mockResolvedValue({
+      success: true,
+      authoringAction: "history",
+    });
+
+    const container = mountMetadata();
+    getMenuButton(container).click();
+    await flushPromises();
+    getButton(container, "viewEmailUpdateHistoryLabel").click();
+    await flushPromises();
+
+    expect(routerPush).toHaveBeenCalledWith({
+      path: "/email-updates/",
+      query: {
+        tab: "history",
+        conversationSlugId: "conversation-one",
+      },
+    });
+  });
+
   it.each([
-    ["enabled", false, "false"],
-    ["disabled", true, "true"],
+    ["enabled", false, "true"],
+    ["disabled", true, "false"],
     ["undisclosed", false, "false"],
     ["undisclosed", true, "true"],
   ])(
-    "renders %s with resolved=%s as checked=%s",
+    "renders choice %s with resolved=%s as checked=%s",
     async (state, resolvedEnabled, expectedChecked) => {
       api.getConversationSummary.mockResolvedValue({
         success: true,
@@ -334,6 +372,12 @@ describe("PostMetadata email update actions", () => {
     getButton(container, "receiveEmailUpdatesLabel").click();
     await nextTick();
 
+    expect(api.updatePreference).toHaveBeenCalledWith({
+      operation: "set_conversation_preference",
+      conversationSlugId: "conversation-one",
+      enabled: true,
+      source: "menu",
+    });
     expect(
       getButton(container, "receiveEmailUpdatesLabel").dataset.checked
     ).toBe("true");
@@ -348,21 +392,12 @@ describe("PostMetadata email update actions", () => {
       success: true,
       result: {
         operation: "set_conversation_preference",
-        projectPreference: {
-          projectSlug: "project-one",
-          state: "enabled",
-        },
         globalResumed: true,
         conversationPreferences: [
           {
             conversationSlugId: "conversation-one",
             state: "enabled",
             resolvedEnabled: true,
-          },
-          {
-            conversationSlugId: "conversation-two",
-            state: "disabled",
-            resolvedEnabled: false,
           },
         ],
       },
@@ -377,21 +412,12 @@ describe("PostMetadata email update actions", () => {
     );
     expect(removeSummaryQueries).toHaveBeenCalledWith({
       operation: "set_conversation_preference",
-      projectPreference: {
-        projectSlug: "project-one",
-        state: "enabled",
-      },
       globalResumed: true,
       conversationPreferences: [
         {
           conversationSlugId: "conversation-one",
           state: "enabled",
           resolvedEnabled: true,
-        },
-        {
-          conversationSlugId: "conversation-two",
-          state: "disabled",
-          resolvedEnabled: false,
         },
       ],
     });
@@ -417,13 +443,13 @@ describe("PostMetadata email update actions", () => {
 
     expect(
       getButton(container, "receiveEmailUpdatesLabel").dataset.checked
-    ).toBe("true");
+    ).toBe("false");
     write.resolve({ success: false, reason: "feature_not_available" });
     await flushPromises();
 
     expect(
       getButton(container, "receiveEmailUpdatesLabel").dataset.checked
-    ).toBe("false");
+    ).toBe("true");
     expect(showNotifyMessage).toHaveBeenCalledWith(
       "emailUpdatesPreferenceSaveError"
     );
@@ -528,13 +554,20 @@ function getMenuButton(container: HTMLElement): HTMLButtonElement {
 }
 
 function getButton(container: HTMLElement, label: string): HTMLButtonElement {
-  const button = [...container.querySelectorAll("button")].find(
-    (candidate) => candidate.getAttribute("aria-label") === label
-  );
+  const button = findButton(container, label);
   if (button === undefined) {
     throw new Error(`Button not found: ${label}`);
   }
   return button;
+}
+
+function findButton(
+  container: HTMLElement,
+  label: string
+): HTMLButtonElement | undefined {
+  return [...container.querySelectorAll("button")].find(
+    (candidate) => candidate.getAttribute("aria-label") === label
+  );
 }
 
 async function flushPromises(): Promise<void> {

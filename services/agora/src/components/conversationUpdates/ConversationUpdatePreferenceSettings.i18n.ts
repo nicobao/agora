@@ -1,36 +1,22 @@
 import type { SupportedDisplayLanguageCodes } from "src/shared/languages";
 
 export interface ConversationUpdatePreferenceSettingsTranslations {
-  emailUpdates: string;
-  heading: string;
-  description: string;
+  sectionDescription: string;
+  preferenceHierarchyDescription: string;
+  recommendationDescription: string;
   searchLabel: string;
   tryAgain: string;
-  pauseAll: string;
-  pauseDescription: string;
-  saving: string;
-  pausedDescription: string;
+  receiveEmailUpdates: string;
+  updatesOnDescription: string;
+  updatesPausedDescription: string;
   empty: string;
-  projects: string;
-  projectsDescription: string;
   noProject: string;
-  noProjectDescription: string;
-  projectUnavailable: string;
-  conversationUnavailable: string;
-  receiveEmailUpdatesFor: string;
   loadMore: string;
-  projectOn: string;
-  projectOff: string;
-  projectUnset: string;
-  conversationOn: string;
-  conversationOff: string;
+  loadingMore: string;
+  showMore: string;
   verifiedEmailRequired: string;
   preferencesUnavailable: string;
   morePreferencesUnavailable: string;
-  pauseSaved: string;
-  resumeSaved: string;
-  preferenceOnSaved: string;
-  preferenceOffSaved: string;
   savePreferenceError: string;
 }
 
@@ -39,432 +25,287 @@ export const conversationUpdatePreferenceSettingsTranslations: Record<
   ConversationUpdatePreferenceSettingsTranslations
 > = {
   en: {
-    emailUpdates: "Email Updates",
-    heading: "Choose what brings you back",
-    description:
-      "Keep your choices specific. Project preferences apply by default, while a conversation choice can make an exception.",
+    sectionDescription:
+      "Occasional email updates from facilitators keep you informed about selected projects and conversations and invite you to participate again. No advertising, fundraising, political campaigning, or unrelated promotion.",
+    preferenceHierarchyDescription:
+      "A project setting is the default for its conversations. Individual conversation choices override it.",
+    recommendationDescription:
+      "We recommend keeping them on so you don’t miss important developments. You can change this anytime.",
     searchLabel: "Search projects and conversations",
     tryAgain: "Try again",
-    pauseAll: "Pause all Email Updates",
-    pauseDescription: "Your project and conversation choices stay saved.",
-    saving: "Saving...",
-    pausedDescription:
-      "All Email Updates are paused. Your choices below remain saved and can still be changed.",
+    receiveEmailUpdates: "Receive Email Updates",
+    updatesOnDescription:
+      "You’ll receive updates from your selected projects and conversations.",
+    updatesPausedDescription:
+      "All Email Updates are paused. Your project and conversation choices stay saved.",
     empty: "No Email Update preferences match this search.",
-    projects: "Projects",
-    projectsDescription: "Set a default, then adjust individual conversations.",
     noProject: "No Project",
-    noProjectDescription:
-      "These conversations each have their own explicit choice.",
-    projectUnavailable: "This project preference is temporarily unavailable.",
-    conversationUnavailable:
-      "This conversation preference is temporarily unavailable.",
-    receiveEmailUpdatesFor: "Receive Email Updates for {name}",
     loadMore: "Load more",
-    projectOn: "On for this project",
-    projectOff: "Off for this project",
-    projectUnset: "No project choice saved",
-    conversationOn: "On for this conversation",
-    conversationOff: "Off for this conversation",
+    loadingMore: "Loading more preferences",
+    showMore: "Show more",
     verifiedEmailRequired:
       "Verify an email address before changing Email Update preferences.",
     preferencesUnavailable:
       "Email Update preferences are unavailable right now.",
     morePreferencesUnavailable:
       "More Email Update preferences could not be loaded.",
-    pauseSaved: "Email Updates paused.",
-    resumeSaved: "Email Updates resumed.",
-    preferenceOnSaved: "Email update preference saved: on.",
-    preferenceOffSaved: "Email update preference saved: off.",
     savePreferenceError: "Couldn’t save your email update preference.",
   },
   es: {
-    emailUpdates: "Novedades por correo",
-    heading: "Elige qué te hace volver",
-    description:
-      "Define tus opciones con precisión. Las preferencias del proyecto se aplican de forma predeterminada, pero puedes hacer excepciones por conversación.",
+    sectionDescription:
+      "Las novedades ocasionales por correo de quienes facilitan los proyectos y las conversaciones le permiten mantenerse al día y le invitan a volver a participar. Sin publicidad, recaudación de fondos, campañas políticas ni promociones no relacionadas.",
+    preferenceHierarchyDescription:
+      "La configuración de un proyecto se aplica de forma predeterminada a sus conversaciones. Las opciones de cada conversación la sustituyen.",
+    recommendationDescription:
+      "Le recomendamos mantenerlas activadas para no perderse novedades importantes. Puede cambiar esta opción cuando quiera.",
     searchLabel: "Buscar proyectos y conversaciones",
     tryAgain: "Intentar de nuevo",
-    pauseAll: "Pausar todas las novedades por correo",
-    pauseDescription:
-      "Tus opciones de proyectos y conversaciones seguirán guardadas.",
-    saving: "Guardando...",
-    pausedDescription:
-      "Todas las novedades por correo están pausadas. Tus opciones siguen guardadas y puedes modificarlas.",
+    receiveEmailUpdates: "Recibir novedades por correo",
+    updatesOnDescription:
+      "Recibirá novedades de los proyectos y las conversaciones que haya seleccionado.",
+    updatesPausedDescription:
+      "Todas las novedades por correo están pausadas. Sus opciones de proyectos y conversaciones siguen guardadas.",
     empty:
       "Ninguna preferencia de seguimiento por correo coincide con esta búsqueda.",
-    projects: "Proyectos",
-    projectsDescription:
-      "Define una opción predeterminada y ajusta cada conversación.",
     noProject: "Sin proyecto",
-    noProjectDescription:
-      "Cada una de estas conversaciones tiene su propia opción.",
-    projectUnavailable:
-      "La preferencia de seguimiento por correo de este proyecto no está disponible temporalmente.",
-    conversationUnavailable:
-      "La preferencia de seguimiento por correo de esta conversación no está disponible temporalmente.",
-    receiveEmailUpdatesFor: "Seguir {name} por correo",
     loadMore: "Cargar más",
-    projectOn: "Seguimiento activado para este proyecto",
-    projectOff: "Seguimiento desactivado para este proyecto",
-    projectUnset: "Sin preferencia de seguimiento para el proyecto",
-    conversationOn: "Seguimiento activado para esta conversación",
-    conversationOff: "Seguimiento desactivado para esta conversación",
+    loadingMore: "Cargando más preferencias",
+    showMore: "Mostrar más",
     verifiedEmailRequired:
-      "Verifica una dirección de correo electrónico antes de cambiar tu preferencia de seguimiento por correo.",
+      "Verifique una dirección de correo electrónico antes de cambiar su preferencia de seguimiento por correo.",
     preferencesUnavailable:
       "Las preferencias de seguimiento por correo no están disponibles ahora.",
     morePreferencesUnavailable:
       "No se pudieron cargar más preferencias de seguimiento por correo.",
-    pauseSaved: "Novedades por correo pausadas.",
-    resumeSaved: "Novedades por correo reanudadas.",
-    preferenceOnSaved: "Preferencia de seguimiento por correo guardada: activada.",
-    preferenceOffSaved:
-      "Preferencia de seguimiento por correo guardada: desactivada.",
     savePreferenceError:
-      "No se pudo guardar tu preferencia de seguimiento por correo.",
+      "No se pudo guardar su preferencia de seguimiento por correo.",
   },
   fr: {
-    emailUpdates: "Nouvelles par e-mail",
-    heading: "Choisissez ce qui vous fait revenir",
-    description:
-      "Précisez vos choix. Les préférences du projet s’appliquent par défaut, mais chaque conversation peut faire exception.",
+    sectionDescription:
+      "Les nouvelles occasionnelles par e-mail des facilitateurs vous tiennent informé des projets et conversations sélectionnés et vous invitent à participer à nouveau. Sans publicité, appel aux dons, campagne politique ni promotion sans rapport.",
+    preferenceHierarchyDescription:
+      "Le réglage d’un projet s’applique par défaut à ses conversations. Le choix de chaque conversation le remplace.",
+    recommendationDescription:
+      "Nous vous recommandons de les garder activées pour ne manquer aucune évolution importante. Vous pouvez modifier ce choix à tout moment.",
     searchLabel: "Rechercher des projets et des conversations",
     tryAgain: "Réessayer",
-    pauseAll: "Suspendre toutes les nouvelles par e-mail",
-    pauseDescription:
-      "Vos choix de projets et de conversations restent enregistrés.",
-    saving: "Enregistrement...",
-    pausedDescription:
-      "Toutes les nouvelles par e-mail sont suspendues. Vos choix restent enregistrés et peuvent encore être modifiés.",
+    receiveEmailUpdates: "Recevoir les nouvelles par e-mail",
+    updatesOnDescription:
+      "Vous recevrez les nouvelles des projets et conversations sélectionnés.",
+    updatesPausedDescription:
+      "Toutes les nouvelles par e-mail sont suspendues. Vos choix de projets et de conversations restent enregistrés.",
     empty:
       "Aucune préférence de suivi par e-mail ne correspond à cette recherche.",
-    projects: "Projets",
-    projectsDescription:
-      "Définissez un choix par défaut, puis ajustez chaque conversation.",
     noProject: "Sans projet",
-    noProjectDescription:
-      "Chacune de ces conversations possède son propre choix explicite.",
-    projectUnavailable:
-      "La préférence de suivi par e-mail de ce projet est temporairement indisponible.",
-    conversationUnavailable:
-      "La préférence de suivi par e-mail de cette conversation est temporairement indisponible.",
-    receiveEmailUpdatesFor: "Suivre {name} par e-mail",
     loadMore: "Charger plus",
-    projectOn: "Suivi activé pour ce projet",
-    projectOff: "Suivi désactivé pour ce projet",
-    projectUnset: "Aucune préférence de suivi pour le projet",
-    conversationOn: "Suivi activé pour cette conversation",
-    conversationOff: "Suivi désactivé pour cette conversation",
+    loadingMore: "Chargement de préférences supplémentaires",
+    showMore: "Afficher plus",
     verifiedEmailRequired:
       "Vérifiez une adresse e-mail avant de modifier votre préférence de suivi par e-mail.",
     preferencesUnavailable:
       "Les préférences de suivi par e-mail sont indisponibles pour le moment.",
     morePreferencesUnavailable:
       "Impossible de charger davantage de préférences de suivi par e-mail.",
-    pauseSaved: "Nouvelles par e-mail suspendues.",
-    resumeSaved: "Nouvelles par e-mail réactivées.",
-    preferenceOnSaved:
-      "Préférence de suivi par e-mail enregistrée : activée.",
-    preferenceOffSaved:
-      "Préférence de suivi par e-mail enregistrée : désactivée.",
     savePreferenceError:
       "Impossible d’enregistrer votre préférence de suivi par e-mail.",
   },
   "zh-Hant": {
-    emailUpdates: "電子郵件更新",
-    heading: "選擇讓你再次回來的內容",
-    description:
-      "請明確設定你的選擇。專案偏好會預設套用，而個別對話可以例外設定。",
+    sectionDescription:
+      "協作者傳送的不定期電子郵件動態，讓你掌握所選專案和對話的消息並再次參與。不包含廣告、募款、政治宣傳或無關推廣。",
+    preferenceHierarchyDescription:
+      "專案設定是其中對話的預設值。個別對話的選擇會優先套用。",
+    recommendationDescription:
+      "建議保持開啟，以免錯過重要進展。你可以隨時變更此選項。",
     searchLabel: "搜尋專案和對話",
     tryAgain: "再試一次",
-    pauseAll: "暫停所有電子郵件更新",
-    pauseDescription: "你的專案和對話選擇會保留。",
-    saving: "儲存中...",
-    pausedDescription:
-      "所有電子郵件更新都已暫停。下方選擇仍會保留，也可以繼續修改。",
+    receiveEmailUpdates: "接收電子郵件更新",
+    updatesOnDescription: "你會收到所選專案和對話的更新。",
+    updatesPausedDescription:
+      "所有電子郵件更新都已暫停。你的專案和對話選擇會保留。",
     empty: "沒有符合此搜尋的電子郵件更新偏好。",
-    projects: "專案",
-    projectsDescription: "先設定預設值，再調整個別對話。",
     noProject: "無專案",
-    noProjectDescription: "這些對話各自有明確的選擇。",
-    projectUnavailable: "此專案偏好暫時無法使用。",
-    conversationUnavailable: "此對話偏好暫時無法使用。",
-    receiveEmailUpdatesFor: "接收 {name} 的電子郵件更新",
     loadMore: "載入更多",
-    projectOn: "此專案已開啟",
-    projectOff: "此專案已關閉",
-    projectUnset: "尚未儲存專案選擇",
-    conversationOn: "此對話已開啟",
-    conversationOff: "此對話已關閉",
+    loadingMore: "正在載入更多偏好設定",
+    showMore: "顯示更多",
     verifiedEmailRequired: "請先驗證電子郵件地址，再變更電子郵件更新偏好。",
     preferencesUnavailable: "目前無法使用電子郵件更新偏好。",
     morePreferencesUnavailable: "無法載入更多電子郵件更新偏好。",
-    pauseSaved: "電子郵件更新已暫停。",
-    resumeSaved: "電子郵件更新已恢復。",
-    preferenceOnSaved: "偏好已儲存：開啟。",
-    preferenceOffSaved: "偏好已儲存：關閉。",
     savePreferenceError: "無法儲存你的電子郵件更新偏好。",
   },
   "zh-Hans": {
-    emailUpdates: "电子邮件更新",
-    heading: "选择让你再次回来的内容",
-    description:
-      "请明确设置你的选择。项目偏好会默认应用，而单个对话可以例外设置。",
+    sectionDescription:
+      "协作者发送的不定期邮件动态，让你掌握所选项目和对话的消息并再次参与。不包含广告、募款、政治宣传或无关推广。",
+    preferenceHierarchyDescription:
+      "项目设置是其中对话的默认值。单个对话的选择会优先应用。",
+    recommendationDescription:
+      "建议保持开启，以免错过重要进展。你可以随时更改此选项。",
     searchLabel: "搜索项目和对话",
     tryAgain: "重试",
-    pauseAll: "暂停所有电子邮件更新",
-    pauseDescription: "你的项目和对话选择会保留。",
-    saving: "正在保存...",
-    pausedDescription:
-      "所有电子邮件更新都已暂停。下方选择仍会保留，也可以继续修改。",
+    receiveEmailUpdates: "接收电子邮件更新",
+    updatesOnDescription: "你会收到所选项目和对话的更新。",
+    updatesPausedDescription:
+      "所有电子邮件更新都已暂停。你的项目和对话选择会保留。",
     empty: "没有符合此搜索的电子邮件更新偏好。",
-    projects: "项目",
-    projectsDescription: "先设置默认值，再调整单个对话。",
     noProject: "无项目",
-    noProjectDescription: "这些对话各自有明确的选择。",
-    projectUnavailable: "此项目偏好暂时不可用。",
-    conversationUnavailable: "此对话偏好暂时不可用。",
-    receiveEmailUpdatesFor: "接收 {name} 的电子邮件更新",
     loadMore: "加载更多",
-    projectOn: "此项目已开启",
-    projectOff: "此项目已关闭",
-    projectUnset: "尚未保存项目选择",
-    conversationOn: "此对话已开启",
-    conversationOff: "此对话已关闭",
+    loadingMore: "正在加载更多偏好设置",
+    showMore: "显示更多",
     verifiedEmailRequired: "请先验证电子邮件地址，再更改电子邮件更新偏好。",
     preferencesUnavailable: "目前无法使用电子邮件更新偏好。",
     morePreferencesUnavailable: "无法加载更多电子邮件更新偏好。",
-    pauseSaved: "电子邮件更新已暂停。",
-    resumeSaved: "电子邮件更新已恢复。",
-    preferenceOnSaved: "偏好已保存：开启。",
-    preferenceOffSaved: "偏好已保存：关闭。",
     savePreferenceError: "无法保存你的电子邮件更新偏好。",
   },
   ja: {
-    emailUpdates: "メール更新",
-    heading: "再訪のきっかけを選ぶ",
-    description:
-      "受信設定を細かく選べます。プロジェクトの設定が標準で適用され、会話ごとに例外を設定できます。",
+    sectionDescription:
+      "ファシリテーターから届く不定期のメール更新で、選択したプロジェクトや会話の情報を確認し、再び参加できます。広告、資金集め、政治運動、無関係な宣伝は含まれません。",
+    preferenceHierarchyDescription:
+      "プロジェクトの設定は、その会話に適用される既定値です。会話ごとの選択が優先されます。",
+    recommendationDescription:
+      "重要な進展を見逃さないよう、オンのままにすることをおすすめします。この設定はいつでも変更できます。",
     searchLabel: "プロジェクトと会話を検索",
     tryAgain: "もう一度試す",
-    pauseAll: "すべてのメール更新を一時停止",
-    pauseDescription: "プロジェクトと会話の設定は保存されたままです。",
-    saving: "保存中...",
-    pausedDescription:
-      "すべてのメール更新を一時停止しています。以下の設定は保存され、引き続き変更できます。",
+    receiveEmailUpdates: "メール更新を受け取る",
+    updatesOnDescription: "選択したプロジェクトと会話の更新を受け取ります。",
+    updatesPausedDescription:
+      "すべてのメール更新は一時停止されています。プロジェクトと会話の選択内容は保存されたままです。",
     empty: "検索に一致するメール更新設定はありません。",
-    projects: "プロジェクト",
-    projectsDescription: "標準設定を決めてから、会話ごとに調整します。",
     noProject: "プロジェクトなし",
-    noProjectDescription: "これらの会話には個別の設定があります。",
-    projectUnavailable: "このプロジェクトの設定は一時的に利用できません。",
-    conversationUnavailable: "この会話の設定は一時的に利用できません。",
-    receiveEmailUpdatesFor: "{name} のメール更新を受信",
     loadMore: "さらに読み込む",
-    projectOn: "このプロジェクトではオン",
-    projectOff: "このプロジェクトではオフ",
-    projectUnset: "プロジェクトの設定は未保存",
-    conversationOn: "この会話ではオン",
-    conversationOff: "この会話ではオフ",
+    loadingMore: "さらに設定を読み込んでいます",
+    showMore: "さらに表示",
     verifiedEmailRequired:
       "メール更新設定を変更する前に、メールアドレスを確認してください。",
     preferencesUnavailable: "メール更新設定は現在利用できません。",
     morePreferencesUnavailable: "メール更新設定をさらに読み込めませんでした。",
-    pauseSaved: "メール更新を一時停止しました。",
-    resumeSaved: "メール更新を再開しました。",
-    preferenceOnSaved: "メール更新設定をオンで保存しました。",
-    preferenceOffSaved: "メール更新設定をオフで保存しました。",
     savePreferenceError: "メール更新設定を保存できませんでした。",
   },
   ar: {
-    emailUpdates: "تحديثات البريد الإلكتروني",
-    heading: "اختر ما يعيدك",
-    description:
-      "حدّد خياراتك بدقة. تُطبّق تفضيلات المشروع افتراضيًا، ويمكن لخيار المحادثة أن يكون استثناءً.",
+    sectionDescription:
+      "تبقيك تحديثات البريد الإلكتروني العرضية من الميسّرين على اطلاع بالمشاريع والمحادثات المحددة وتدعوك للمشاركة مجددًا. لا إعلانات أو جمع تبرعات أو حملات سياسية أو ترويج غير ذي صلة.",
+    preferenceHierarchyDescription:
+      "إعداد المشروع هو الإعداد الافتراضي لمحادثاته، وتكون لاختيارات المحادثات الفردية الأولوية عليه.",
+    recommendationDescription:
+      "نوصي بإبقائها مفعّلة حتى لا تفوتك التطورات المهمة. يمكنك تغيير هذا الخيار في أي وقت.",
     searchLabel: "البحث في المشاريع والمحادثات",
     tryAgain: "حاول مجددًا",
-    pauseAll: "إيقاف جميع تحديثات البريد الإلكتروني مؤقتًا",
-    pauseDescription: "ستبقى خيارات المشاريع والمحادثات محفوظة.",
-    saving: "جارٍ الحفظ...",
-    pausedDescription:
-      "جميع تحديثات البريد الإلكتروني متوقفة مؤقتًا. ستبقى خياراتك أدناه محفوظة ويمكنك تعديلها.",
+    receiveEmailUpdates: "تلقي تحديثات البريد الإلكتروني",
+    updatesOnDescription: "ستتلقى تحديثات من المشاريع والمحادثات التي اخترتها.",
+    updatesPausedDescription:
+      "جميع تحديثات البريد الإلكتروني متوقفة مؤقتًا. ستبقى خيارات المشاريع والمحادثات محفوظة.",
     empty: "لا توجد تفضيلات لتحديثات البريد الإلكتروني تطابق هذا البحث.",
-    projects: "المشاريع",
-    projectsDescription: "عيّن خيارًا افتراضيًا، ثم عدّل كل محادثة.",
     noProject: "بلا مشروع",
-    noProjectDescription: "لكل محادثة من هذه المحادثات خيارها الخاص.",
-    projectUnavailable: "تفضيل هذا المشروع غير متاح مؤقتًا.",
-    conversationUnavailable: "تفضيل هذه المحادثة غير متاح مؤقتًا.",
-    receiveEmailUpdatesFor: "تلقي تحديثات البريد الإلكتروني من {name}",
     loadMore: "تحميل المزيد",
-    projectOn: "مفعّلة لهذا المشروع",
-    projectOff: "متوقفة لهذا المشروع",
-    projectUnset: "لم يُحفظ خيار للمشروع",
-    conversationOn: "مفعّلة لهذه المحادثة",
-    conversationOff: "متوقفة لهذه المحادثة",
+    loadingMore: "جارٍ تحميل المزيد من التفضيلات",
+    showMore: "عرض المزيد",
     verifiedEmailRequired:
       "تحقق من عنوان بريد إلكتروني قبل تغيير تفضيلات التحديثات.",
     preferencesUnavailable: "تفضيلات تحديثات البريد الإلكتروني غير متاحة الآن.",
     morePreferencesUnavailable:
       "تعذر تحميل المزيد من تفضيلات تحديثات البريد الإلكتروني.",
-    pauseSaved: "تم إيقاف تحديثات البريد الإلكتروني مؤقتًا.",
-    resumeSaved: "تم استئناف تحديثات البريد الإلكتروني.",
-    preferenceOnSaved: "تم حفظ التفضيل: مفعّل.",
-    preferenceOffSaved: "تم حفظ التفضيل: متوقف.",
     savePreferenceError: "تعذر حفظ تفضيل تحديثات البريد الإلكتروني.",
   },
   fa: {
-    emailUpdates: "به‌روزرسانی‌های ایمیلی",
-    heading: "انتخاب کنید چه چیزی شما را بازمی‌گرداند",
-    description:
-      "انتخاب‌هایتان را دقیق تنظیم کنید. تنظیمات پروژه به‌طور پیش‌فرض اعمال می‌شوند و هر گفتگو می‌تواند استثنا باشد.",
+    sectionDescription:
+      "به‌روزرسانی‌های ایمیلی گاه‌به‌گاه تسهیل‌گران، شما را از پروژه‌ها و گفت‌وگوهای انتخاب‌شده باخبر می‌کند و برای مشارکت دوباره دعوت می‌کند. بدون تبلیغات، جمع‌آوری کمک مالی، کارزار سیاسی یا ترویج نامرتبط.",
+    preferenceHierarchyDescription:
+      "تنظیم پروژه، پیش‌فرض گفتگوهای آن است و انتخاب هر گفتگوی جداگانه بر آن اولویت دارد.",
+    recommendationDescription:
+      "پیشنهاد می‌کنیم آن‌ها را روشن نگه دارید تا رویدادهای مهم را از دست ندهید. هر زمان بخواهید می‌توانید این گزینه را تغییر دهید.",
     searchLabel: "جستجوی پروژه‌ها و گفتگوها",
     tryAgain: "تلاش دوباره",
-    pauseAll: "توقف موقت همه به‌روزرسانی‌های ایمیلی",
-    pauseDescription: "انتخاب‌های پروژه و گفتگو ذخیره می‌مانند.",
-    saving: "در حال ذخیره...",
-    pausedDescription:
-      "همه به‌روزرسانی‌های ایمیلی موقتاً متوقف شده‌اند. انتخاب‌های زیر ذخیره می‌مانند و همچنان قابل تغییرند.",
+    receiveEmailUpdates: "دریافت به‌روزرسانی‌های ایمیلی",
+    updatesOnDescription:
+      "به‌روزرسانی‌های پروژه‌ها و گفتگوهای انتخاب‌شده را دریافت خواهید کرد.",
+    updatesPausedDescription:
+      "همهٔ به‌روزرسانی‌های ایمیلی موقتاً متوقف شده‌اند. انتخاب‌های شما برای پروژه‌ها و گفتگوها ذخیره می‌مانند.",
     empty: "هیچ تنظیم به‌روزرسانی ایمیلی با این جستجو مطابقت ندارد.",
-    projects: "پروژه‌ها",
-    projectsDescription: "یک پیش‌فرض تعیین کنید و سپس هر گفتگو را تنظیم کنید.",
     noProject: "بدون پروژه",
-    noProjectDescription: "هر یک از این گفتگوها انتخاب مشخص خود را دارد.",
-    projectUnavailable: "تنظیم این پروژه موقتاً در دسترس نیست.",
-    conversationUnavailable: "تنظیم این گفتگو موقتاً در دسترس نیست.",
-    receiveEmailUpdatesFor: "دریافت به‌روزرسانی ایمیلی برای {name}",
     loadMore: "بارگیری بیشتر",
-    projectOn: "برای این پروژه روشن است",
-    projectOff: "برای این پروژه خاموش است",
-    projectUnset: "انتخابی برای پروژه ذخیره نشده است",
-    conversationOn: "برای این گفتگو روشن است",
-    conversationOff: "برای این گفتگو خاموش است",
+    loadingMore: "در حال بارگیری تنظیمات بیشتر",
+    showMore: "نمایش بیشتر",
     verifiedEmailRequired:
       "پیش از تغییر تنظیمات، یک نشانی ایمیل را تأیید کنید.",
     preferencesUnavailable: "تنظیمات به‌روزرسانی ایمیلی اکنون در دسترس نیست.",
     morePreferencesUnavailable:
       "تنظیمات بیشتری از به‌روزرسانی ایمیلی بارگیری نشد.",
-    pauseSaved: "به‌روزرسانی‌های ایمیلی متوقف شدند.",
-    resumeSaved: "به‌روزرسانی‌های ایمیلی از سر گرفته شدند.",
-    preferenceOnSaved: "تنظیم ذخیره شد: روشن.",
-    preferenceOffSaved: "تنظیم ذخیره شد: خاموش.",
     savePreferenceError: "تنظیم به‌روزرسانی ایمیلی شما ذخیره نشد.",
   },
   he: {
-    emailUpdates: "עדכונים בדוא״ל",
-    heading: "בחרו מה יחזיר אתכם",
-    description:
-      "הגדירו את הבחירות במדויק. העדפות הפרויקט חלות כברירת מחדל, ואפשר להגדיר חריגה לכל שיחה.",
+    sectionDescription:
+      "עדכונים מזדמנים בדוא״ל מהמנחים משאירים אתכם מעודכנים בפרויקטים ובשיחות שבחרתם ומזמינים אתכם להשתתף שוב. ללא פרסום, גיוס תרומות, תעמולה פוליטית או קידום שאינו קשור.",
+    preferenceHierarchyDescription:
+      "הגדרת הפרויקט היא ברירת המחדל לשיחות שבו. בחירה בשיחה מסוימת גוברת עליה.",
+    recommendationDescription:
+      "מומלץ להשאיר אותם פעילים כדי לא להחמיץ התפתחויות חשובות. אפשר לשנות זאת בכל עת.",
     searchLabel: "חיפוש פרויקטים ושיחות",
     tryAgain: "ניסיון נוסף",
-    pauseAll: "השהיית כל העדכונים בדוא״ל",
-    pauseDescription: "הבחירות לפרויקטים ולשיחות יישארו שמורות.",
-    saving: "בשמירה...",
-    pausedDescription:
-      "כל העדכונים בדוא״ל מושהים. הבחירות שלמטה נשארות שמורות ועדיין אפשר לשנות אותן.",
+    receiveEmailUpdates: "קבלת עדכונים בדוא״ל",
+    updatesOnDescription: "תקבלו עדכונים מהפרויקטים ומהשיחות שבחרתם.",
+    updatesPausedDescription:
+      "כל העדכונים בדוא״ל מושהים. הבחירות שלכם בפרויקטים ובשיחות יישארו שמורות.",
     empty: "אין העדפות לעדכונים בדוא״ל שתואמות לחיפוש.",
-    projects: "פרויקטים",
-    projectsDescription: "הגדירו ברירת מחדל ואז התאימו כל שיחה.",
     noProject: "ללא פרויקט",
-    noProjectDescription: "לכל אחת מהשיחות האלה יש בחירה מפורשת משלה.",
-    projectUnavailable: "העדפת הפרויקט אינה זמינה זמנית.",
-    conversationUnavailable: "העדפת השיחה אינה זמינה זמנית.",
-    receiveEmailUpdatesFor: "קבלת עדכונים בדוא״ל עבור {name}",
     loadMore: "טעינת עוד",
-    projectOn: "פעיל בפרויקט הזה",
-    projectOff: "כבוי בפרויקט הזה",
-    projectUnset: "לא נשמרה בחירה לפרויקט",
-    conversationOn: "פעיל בשיחה הזאת",
-    conversationOff: "כבוי בשיחה הזאת",
+    loadingMore: "טעינת העדפות נוספות",
+    showMore: "הצגת עוד",
     verifiedEmailRequired: "יש לאמת כתובת דוא״ל לפני שינוי העדפות העדכונים.",
     preferencesUnavailable: "העדפות העדכונים בדוא״ל אינן זמינות כרגע.",
     morePreferencesUnavailable: "לא ניתן לטעון העדפות נוספות לעדכונים בדוא״ל.",
-    pauseSaved: "העדכונים בדוא״ל הושהו.",
-    resumeSaved: "העדכונים בדוא״ל חודשו.",
-    preferenceOnSaved: "ההעדפה נשמרה: פעיל.",
-    preferenceOffSaved: "ההעדפה נשמרה: כבוי.",
     savePreferenceError: "לא ניתן לשמור את העדפת העדכונים בדוא״ל.",
   },
   ky: {
-    emailUpdates: "Электрондук почта жаңыртуулары",
-    heading: "Сизди кайра алып келген нерсени тандаңыз",
-    description:
-      "Тандоолоруңузду тактаңыз. Долбоордун жөндөөлөрү демейки боюнча колдонулат, ал эми маекке өзгөчө тандоо коюуга болот.",
+    sectionDescription:
+      "Фасилитаторлордун маал-маалы менен келген электрондук каттары сизди тандалган долбоорлор жана талкуулар тууралуу кабардар кылып, кайра катышууга чакырат. Жарнама, каражат чогултуу, саясий үгүт же тиешеси жок илгерилетүү болбойт.",
+    preferenceHierarchyDescription:
+      "Долбоордун жөндөөсү андагы маектер үчүн баштапкы тандоо болот. Ар бир маекке өзүнчө жасалган тандоо андан жогору турат.",
+    recommendationDescription:
+      "Маанилүү өзгөрүүлөрдү өткөрүп жибербөө үчүн аларды күйгүзүп коюуну сунуштайбыз. Муну каалаган убакта өзгөртө аласыз.",
     searchLabel: "Долбоорлорду жана маектерди издөө",
     tryAgain: "Кайра аракет кылуу",
-    pauseAll: "Бардык электрондук почта жаңыртууларын тындыруу",
-    pauseDescription: "Долбоор жана маек тандоолоруңуз сакталат.",
-    saving: "Сакталууда...",
-    pausedDescription:
-      "Бардык электрондук почта жаңыртуулары тындырылды. Төмөнкү тандоолоруңуз сакталат жана аларды өзгөртө аласыз.",
+    receiveEmailUpdates: "Электрондук почта жаңыртууларын алуу",
+    updatesOnDescription:
+      "Тандалган долбоорлор жана маектер боюнча жаңыртууларды аласыз.",
+    updatesPausedDescription:
+      "Бардык электрондук почта жаңыртуулары тындырылды. Долбоор жана маек тандоолоруңуз сакталат.",
     empty: "Бул издөөгө туура келген электрондук почта жөндөөлөрү жок.",
-    projects: "Долбоорлор",
-    projectsDescription:
-      "Демейки тандоону коюп, андан кийин ар бир маекти жөндөңүз.",
     noProject: "Долбоорсуз",
-    noProjectDescription: "Бул маектердин ар биринин өзүнчө тандоосу бар.",
-    projectUnavailable: "Бул долбоордун жөндөөсү убактылуу жеткиликсиз.",
-    conversationUnavailable: "Бул маектин жөндөөсү убактылуу жеткиликсиз.",
-    receiveEmailUpdatesFor: "{name} үчүн электрондук почта жаңыртууларын алуу",
     loadMore: "Дагы жүктөө",
-    projectOn: "Бул долбоор үчүн күйүк",
-    projectOff: "Бул долбоор үчүн өчүк",
-    projectUnset: "Долбоор тандоосу сакталган эмес",
-    conversationOn: "Бул маек үчүн күйүк",
-    conversationOff: "Бул маек үчүн өчүк",
+    loadingMore: "Дагы жөндөөлөр жүктөлүүдө",
+    showMore: "Дагы көрсөтүү",
     verifiedEmailRequired:
       "Жөндөөлөрдү өзгөртүүдөн мурун электрондук почта дарегин ырастаңыз.",
     preferencesUnavailable:
       "Электрондук почта жаңыртуу жөндөөлөрү азыр жеткиликсиз.",
     morePreferencesUnavailable:
       "Кошумча электрондук почта жаңыртуу жөндөөлөрү жүктөлгөн жок.",
-    pauseSaved: "Электрондук почта жаңыртуулары тындырылды.",
-    resumeSaved: "Электрондук почта жаңыртуулары улантылды.",
-    preferenceOnSaved: "Жөндөө сакталды: күйүк.",
-    preferenceOffSaved: "Жөндөө сакталды: өчүк.",
     savePreferenceError: "Электрондук почта жаңыртуу жөндөөңүз сакталган жок.",
   },
   ru: {
-    emailUpdates: "Обновления по электронной почте",
-    heading: "Выберите, что поможет вам вернуться",
-    description:
-      "Настройте выбор точно. Настройки проекта применяются по умолчанию, а для отдельного обсуждения можно сделать исключение.",
+    sectionDescription:
+      "Периодические письма от фасилитаторов помогают следить за выбранными проектами и обсуждениями и приглашают снова участвовать. Без рекламы, сбора средств, политической агитации и несвязанного продвижения.",
+    preferenceHierarchyDescription:
+      "Настройка проекта применяется к его обсуждениям по умолчанию. Выбор для отдельного обсуждения имеет приоритет.",
+    recommendationDescription:
+      "Рекомендуем оставить их включёнными, чтобы не пропустить важные события. Вы можете изменить этот выбор в любое время.",
     searchLabel: "Поиск проектов и обсуждений",
     tryAgain: "Повторить",
-    pauseAll: "Приостановить все обновления по электронной почте",
-    pauseDescription: "Настройки проектов и обсуждений останутся сохранены.",
-    saving: "Сохранение...",
-    pausedDescription:
-      "Все обновления по электронной почте приостановлены. Настройки ниже сохранены, и их по-прежнему можно менять.",
+    receiveEmailUpdates: "Получать обновления по электронной почте",
+    updatesOnDescription:
+      "Вы будете получать обновления по выбранным проектам и обсуждениям.",
+    updatesPausedDescription:
+      "Все обновления по электронной почте приостановлены. Ваш выбор проектов и обсуждений сохранится.",
     empty:
       "Нет настроек обновлений по электронной почте, соответствующих поиску.",
-    projects: "Проекты",
-    projectsDescription:
-      "Задайте настройку по умолчанию, затем измените отдельные обсуждения.",
     noProject: "Без проекта",
-    noProjectDescription:
-      "Для каждого из этих обсуждений задан отдельный выбор.",
-    projectUnavailable: "Настройка этого проекта временно недоступна.",
-    conversationUnavailable: "Настройка этого обсуждения временно недоступна.",
-    receiveEmailUpdatesFor:
-      "Получать обновления по электронной почте для {name}",
     loadMore: "Загрузить ещё",
-    projectOn: "Включено для этого проекта",
-    projectOff: "Выключено для этого проекта",
-    projectUnset: "Настройка проекта не сохранена",
-    conversationOn: "Включено для этого обсуждения",
-    conversationOff: "Выключено для этого обсуждения",
+    loadingMore: "Загрузка дополнительных настроек",
+    showMore: "Показать ещё",
     verifiedEmailRequired:
       "Подтвердите адрес электронной почты перед изменением настроек обновлений.",
     preferencesUnavailable:
       "Настройки обновлений по электронной почте сейчас недоступны.",
     morePreferencesUnavailable:
       "Не удалось загрузить дополнительные настройки обновлений по электронной почте.",
-    pauseSaved: "Обновления по электронной почте приостановлены.",
-    resumeSaved: "Обновления по электронной почте возобновлены.",
-    preferenceOnSaved: "Настройка сохранена: включено.",
-    preferenceOffSaved: "Настройка сохранена: выключено.",
     savePreferenceError:
       "Не удалось сохранить настройку обновлений по электронной почте.",
   },

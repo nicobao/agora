@@ -341,6 +341,20 @@ const zodAdminOrganizationOption = z
         canUseDynamicTranslation: z.boolean(),
     })
     .strict();
+const zodAdminNoProjectEmailUpdatesContact = z
+    .object({
+        name: z.string().trim().min(1).max(MAX_LENGTH_NAME_CREATOR),
+        email: zodEmail,
+    })
+    .strict();
+const zodAdminNoProjectEmailUpdatesConfiguration = z
+    .object({
+        hasEntitlement: z.boolean(),
+        defaultEnabled: z.boolean(),
+        contact: zodAdminNoProjectEmailUpdatesContact.optional(),
+        canDeleteContact: z.boolean(),
+    })
+    .strict();
 const zodCreateProjectFailureReason = z.enum([
     "unknown_organization_slug",
     "organization_not_listed",
@@ -405,6 +419,7 @@ const zodConversationLanguageSettingsSource = z.enum([
 const zodConversationCreateEmailUpdateConfiguration = z
     .object({
         canConfigure: z.boolean(),
+        hasParticipantContactEmail: z.boolean(),
         scopeDefaultEnabled: z.boolean(),
     })
     .strict();
@@ -687,6 +702,15 @@ export const zodConversationEmailUpdateSubject = z
         minLength: 1,
         maxLength: CONVERSATION_EMAIL_UPDATE_SUBJECT_MAX_LENGTH,
     });
+const zodConversationEmailUpdateBodyHtml = z
+    .string()
+    .min(1)
+    .max(CONVERSATION_EMAIL_UPDATE_HTML_MAX_BYTES)
+    .refine(
+        (html) =>
+            countUtf8Bytes(html) <= CONVERSATION_EMAIL_UPDATE_HTML_MAX_BYTES,
+        "Email body HTML exceeds the UTF-8 byte limit",
+    );
 
 const zodConversationEmailUpdatePreferenceState = z.enum([
     "disabled",
@@ -701,6 +725,7 @@ const zodConversationEmailUpdateAvailability = z.enum([
     "available",
     "temporarily_unavailable",
 ]);
+export const CONVERSATION_EMAIL_UPDATE_PREFERENCE_SEARCH_MAX_LENGTH = 100;
 const zodConversationEmailUpdateCursor = z.string().trim().min(1).max(200);
 const zodConversationEmailUpdateConversationBase = z
     .object({
@@ -711,37 +736,83 @@ const zodConversationEmailUpdateConversationBase = z
         sendingEnabled: z.boolean(),
     })
     .strict();
+const zodConversationEmailUpdateProjectConversations = z.tuple(
+    [zodConversationEmailUpdateConversationBase],
+    zodConversationEmailUpdateConversationBase,
+);
+const zodConversationEmailUpdateNoProjectConversation =
+    zodConversationEmailUpdateConversationBase
+        .extend({ participantContactEmail: zodEmail })
+        .strict();
+const zodConversationEmailUpdateNoProjectConversations = z.tuple(
+    [zodConversationEmailUpdateNoProjectConversation],
+    zodConversationEmailUpdateNoProjectConversation,
+);
+const zodConversationEmailUpdateProjectScopeBase = z
+    .object({
+        kind: z.literal("project"),
+        projectSlug: zodProjectSlug,
+        title: z.string().trim().min(1).max(MAX_LENGTH_TITLE),
+        participantContactEmail: zodEmail,
+    })
+    .strict();
+const zodConversationEmailUpdateNoProjectScopeBase = z
+    .object({
+        kind: z.literal("no_project"),
+        title: z.string().trim().min(1).max(MAX_LENGTH_TITLE),
+    })
+    .strict();
 const zodConversationEmailUpdateScope = z.discriminatedUnion("kind", [
-    z
-        .object({
-            kind: z.literal("project"),
-            projectSlug: zodProjectSlug,
-            title: z.string().trim().min(1).max(MAX_LENGTH_TITLE),
-            participantContactEmail: zodEmail,
-            conversations: z
-                .array(zodConversationEmailUpdateConversationBase)
-                .min(1),
-        })
-        .strict(),
-    z
-        .object({
-            kind: z.literal("no_project"),
-            title: z.string().trim().min(1).max(MAX_LENGTH_TITLE),
-            conversations: z
-                .array(
-                    zodConversationEmailUpdateConversationBase
-                        .extend({ participantContactEmail: zodEmail })
-                        .strict(),
-                )
-                .min(1),
-        })
-        .strict(),
+    zodConversationEmailUpdateProjectScopeBase.extend({
+        conversations: zodConversationEmailUpdateProjectConversations,
+    }),
+    zodConversationEmailUpdateNoProjectScopeBase.extend({
+        conversations: zodConversationEmailUpdateNoProjectConversations,
+    }),
 ]);
+const zodConversationEmailUpdateTransportScope = z.discriminatedUnion("kind", [
+    zodConversationEmailUpdateProjectScopeBase.extend({
+        conversations: z
+            .array(zodConversationEmailUpdateConversationBase)
+            .min(1),
+    }),
+    zodConversationEmailUpdateNoProjectScopeBase.extend({
+        conversations: z
+            .array(zodConversationEmailUpdateNoProjectConversation)
+            .min(1),
+    }),
+]);
+const zodConversationEmailUpdateProjectSelectionBase = z
+    .object({
+        kind: z.literal("project"),
+        projectSlug: zodProjectSlug,
+    })
+    .strict();
+const zodConversationEmailUpdateNoProjectSelection = z
+    .object({
+        kind: z.literal("no_project"),
+        conversationSlugId: zodSlugId,
+    })
+    .strict();
 const zodConversationEmailUpdateSelection = z.discriminatedUnion("kind", [
-    z
-        .object({
-            kind: z.literal("project"),
-            projectSlug: zodProjectSlug,
+    zodConversationEmailUpdateProjectSelectionBase.extend({
+        conversationSlugIds: z
+            .tuple([zodSlugId], zodSlugId)
+            .refine(
+                (values) => values.length <= 1_000,
+                "Conversation selection exceeds 1,000 conversations",
+            )
+            .refine(
+                (values) => new Set(values).size === values.length,
+                "Conversation selection contains duplicates",
+            ),
+    }),
+    zodConversationEmailUpdateNoProjectSelection,
+]);
+const zodConversationEmailUpdateTransportSelection = z.discriminatedUnion(
+    "kind",
+    [
+        zodConversationEmailUpdateProjectSelectionBase.extend({
             conversationSlugIds: z
                 .array(zodSlugId)
                 .min(1)
@@ -750,15 +821,10 @@ const zodConversationEmailUpdateSelection = z.discriminatedUnion("kind", [
                     (values) => new Set(values).size === values.length,
                     "Conversation selection contains duplicates",
                 ),
-        })
-        .strict(),
-    z
-        .object({
-            kind: z.literal("no_project"),
-            conversationSlugId: zodSlugId,
-        })
-        .strict(),
-]);
+        }),
+        zodConversationEmailUpdateNoProjectSelection,
+    ],
+);
 const zodConversationEmailUpdateContext = z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("global") }).strict(),
     z
@@ -880,15 +946,65 @@ const zodConversationEmailUpdateHistoryRecord = z.discriminatedUnion("status", [
         })
         .strict(),
 ]);
-const zodConversationEmailUpdatePreferenceConversation = z
+const zodConversationEmailUpdatePreferenceAvatar = z.discriminatedUnion(
+    "kind",
+    [
+        z
+            .object({
+                kind: z.literal("user"),
+                displayName: z
+                    .string()
+                    .trim()
+                    .min(1)
+                    .max(MAX_LENGTH_NAME_CREATOR),
+                imageUrl: z.url().optional(),
+            })
+            .strict(),
+        z
+            .object({
+                kind: z.literal("organization"),
+                displayName: z
+                    .string()
+                    .trim()
+                    .min(1)
+                    .max(MAX_LENGTH_NAME_CREATOR),
+                imageUrl: z.url().optional(),
+            })
+            .strict(),
+    ],
+);
+const zodConversationEmailUpdatePreferenceConversationBase = z
     .object({
         conversationSlugId: zodSlugId,
         conversationTitle: zodConversationTitle,
-        state: zodConversationEmailUpdatePreferenceChoice,
         resolvedEnabled: z.boolean(),
         availability: zodConversationEmailUpdateAvailability,
+        owner: zodConversationEmailUpdatePreferenceAvatar.optional(),
     })
     .strict();
+const zodConversationEmailUpdatePreferenceConversation = z.discriminatedUnion(
+    "preferenceKind",
+    [
+        zodConversationEmailUpdatePreferenceConversationBase
+            .extend({
+                preferenceKind: z.literal("explicit"),
+                state: zodConversationEmailUpdatePreferenceChoice,
+            })
+            .strict(),
+        zodConversationEmailUpdatePreferenceConversationBase
+            .extend({
+                preferenceKind: z.literal("project_inherited"),
+                state: z.literal("undisclosed"),
+            })
+            .strict(),
+        zodConversationEmailUpdatePreferenceConversationBase
+            .extend({
+                preferenceKind: z.literal("undisclosed"),
+                state: z.literal("undisclosed"),
+            })
+            .strict(),
+    ],
+);
 const zodConversationEmailUpdatePreferenceGroup = z.discriminatedUnion("kind", [
     z
         .object({
@@ -898,9 +1014,11 @@ const zodConversationEmailUpdatePreferenceGroup = z.discriminatedUnion("kind", [
             state: zodConversationEmailUpdatePreferenceState,
             resolvedEnabled: z.boolean(),
             availability: zodConversationEmailUpdateAvailability,
+            owner: zodConversationEmailUpdatePreferenceAvatar.optional(),
             conversations: z.array(
                 zodConversationEmailUpdatePreferenceConversation,
             ),
+            conversationNextCursor: zodConversationEmailUpdateCursor.optional(),
         })
         .strict(),
     z
@@ -910,6 +1028,21 @@ const zodConversationEmailUpdatePreferenceGroup = z.discriminatedUnion("kind", [
             conversations: z.array(
                 zodConversationEmailUpdatePreferenceConversation,
             ),
+            conversationNextCursor: zodConversationEmailUpdateCursor.optional(),
+        })
+        .strict(),
+]);
+const zodConversationEmailUpdatePreferenceFocus = z.discriminatedUnion("kind", [
+    z
+        .object({
+            kind: z.literal("project"),
+            projectSlug: zodProjectSlug,
+        })
+        .strict(),
+    z
+        .object({
+            kind: z.literal("conversation"),
+            conversationSlugId: zodSlugId,
         })
         .strict(),
 ]);
@@ -1599,6 +1732,10 @@ export class Dto {
             preferredOpinionGroupCount:
                 zodPreferredOpinionGroupCount.optional(),
             surveyConfig: zodSurveyConfigInput.nullable().optional(),
+            conversationEmailUpdateEnabledOverride: z
+                .boolean()
+                .nullable()
+                .optional(),
         })
         .strict();
     static updateConversationResponse = z.discriminatedUnion("success", [
@@ -1618,6 +1755,9 @@ export class Dto {
                         "invalid_access_settings",
                         "premium_access_expired",
                         "premium_access_required",
+                        "feature_not_available",
+                        "missing_participant_contact_email",
+                        "active_delivery_conflict",
                     ]),
                     zodRichTextSizeValidationFailureReason,
                 ]),
@@ -2118,6 +2258,66 @@ export class Dto {
             organization: zodAdminOrganization.optional(),
         })
         .strict();
+    static getAdminNoProjectEmailUpdatesRequest = z
+        .object({ organizationSlug: zodOrganizationSlug })
+        .strict();
+    static getAdminNoProjectEmailUpdatesResponse = z.discriminatedUnion(
+        "success",
+        [
+            z
+                .object({
+                    success: z.literal(true),
+                    configuration: zodAdminNoProjectEmailUpdatesConfiguration,
+                })
+                .strict(),
+            z
+                .object({
+                    success: z.literal(false),
+                    reason: z.literal("organization_not_found"),
+                })
+                .strict(),
+        ],
+    );
+    static updateAdminNoProjectEmailUpdatesRequest = z.discriminatedUnion(
+        "defaultEnabled",
+        [
+            z
+                .object({
+                    organizationSlug: zodOrganizationSlug,
+                    defaultEnabled: z.literal(true),
+                    contact: zodAdminNoProjectEmailUpdatesContact,
+                })
+                .strict(),
+            z
+                .object({
+                    organizationSlug: zodOrganizationSlug,
+                    defaultEnabled: z.literal(false),
+                    contact: zodAdminNoProjectEmailUpdatesContact.optional(),
+                })
+                .strict(),
+        ],
+    );
+    static updateAdminNoProjectEmailUpdatesResponse = z.discriminatedUnion(
+        "success",
+        [
+            z
+                .object({
+                    success: z.literal(true),
+                    configuration: zodAdminNoProjectEmailUpdatesConfiguration,
+                })
+                .strict(),
+            z
+                .object({
+                    success: z.literal(false),
+                    reason: z.enum([
+                        "organization_not_found",
+                        "entitlement_required",
+                        "contact_in_use",
+                    ]),
+                })
+                .strict(),
+        ],
+    );
     static getOrganizationMembersRequest = z
         .object({
             organizationName: zodOrganizationSlug,
@@ -3011,6 +3211,8 @@ export class Dto {
         issues: z.array(Dto.maxdiffGitHubPreviewItem),
     });
 
+    static conversationEmailUpdateSelection =
+        zodConversationEmailUpdateSelection;
     static conversationEmailUpdateWorkspaceRequest = z
         .object({
             context: zodConversationEmailUpdateContext,
@@ -3040,6 +3242,28 @@ export class Dto {
                 .strict(),
         ],
     );
+    static conversationEmailUpdateWorkspaceOpenApiResponse =
+        z.discriminatedUnion("success", [
+            z
+                .object({
+                    success: z.literal(true),
+                    resolvedContext: zodConversationEmailUpdateContext,
+                    initialSelection:
+                        zodConversationEmailUpdateTransportSelection.optional(),
+                    testDestinationEmail: zodEmail.optional(),
+                    scopes: z.array(zodConversationEmailUpdateTransportScope),
+                })
+                .strict(),
+            z
+                .object({
+                    success: z.literal(false),
+                    reason: z.enum([
+                        "context_not_found",
+                        "feature_not_available",
+                    ]),
+                })
+                .strict(),
+        ]);
     static conversationEmailUpdateHistoryListRequest = z
         .object({
             context: zodConversationEmailUpdateContext,
@@ -3060,10 +3284,7 @@ export class Dto {
             z
                 .object({
                     success: z.literal(false),
-                    reason: z.enum([
-                        "context_not_found",
-                        "invalid_cursor",
-                    ]),
+                    reason: z.enum(["context_not_found", "invalid_cursor"]),
                 })
                 .strict(),
         ],
@@ -3093,6 +3314,11 @@ export class Dto {
             selection: zodConversationEmailUpdateSelection,
         })
         .strict();
+    static conversationEmailUpdateAudienceEstimateOpenApiRequest = z
+        .object({
+            selection: zodConversationEmailUpdateTransportSelection,
+        })
+        .strict();
     static conversationEmailUpdateAudienceEstimateResponse =
         z.discriminatedUnion("success", [
             z
@@ -3120,16 +3346,14 @@ export class Dto {
         .object({
             selection: zodConversationEmailUpdateSelection,
             subject: zodConversationEmailUpdateSubject,
-            bodyHtml: z
-                .string()
-                .min(1)
-                .max(CONVERSATION_EMAIL_UPDATE_HTML_MAX_BYTES)
-                .refine(
-                    (html) =>
-                        countUtf8Bytes(html) <=
-                        CONVERSATION_EMAIL_UPDATE_HTML_MAX_BYTES,
-                    "Email body HTML exceeds the UTF-8 byte limit",
-                ),
+            bodyHtml: zodConversationEmailUpdateBodyHtml,
+        })
+        .strict();
+    static conversationEmailUpdateSendTestOpenApiRequest = z
+        .object({
+            selection: zodConversationEmailUpdateTransportSelection,
+            subject: zodConversationEmailUpdateSubject,
+            bodyHtml: zodConversationEmailUpdateBodyHtml,
         })
         .strict();
     static conversationEmailUpdateSendTestResponse = z.discriminatedUnion(
@@ -3258,13 +3482,38 @@ export class Dto {
                 .strict(),
         ],
     );
-    static conversationEmailUpdatePreferencesRequest = z
-        .object({
-            search: z.string().trim().min(1).max(100).optional(),
-            cursor: zodConversationEmailUpdateCursor.optional(),
-            limit: z.number().int().min(1).max(50).optional().default(20),
-        })
-        .strict();
+    static conversationEmailUpdatePreferencesRequest = z.discriminatedUnion(
+        "mode",
+        [
+            z
+                .object({
+                    mode: z.literal("browse"),
+                    search: z
+                        .string()
+                        .trim()
+                        .min(1)
+                        .max(
+                            CONVERSATION_EMAIL_UPDATE_PREFERENCE_SEARCH_MAX_LENGTH,
+                        )
+                        .optional(),
+                    cursor: zodConversationEmailUpdateCursor.optional(),
+                    limit: z
+                        .number()
+                        .int()
+                        .min(1)
+                        .max(50)
+                        .optional()
+                        .default(20),
+                })
+                .strict(),
+            z
+                .object({
+                    mode: z.literal("focus"),
+                    focus: zodConversationEmailUpdatePreferenceFocus,
+                })
+                .strict(),
+        ],
+    );
     static conversationEmailUpdatePreferencesResponse = z.discriminatedUnion(
         "success",
         [
@@ -3287,6 +3536,47 @@ export class Dto {
                 .strict(),
         ],
     );
+    static conversationEmailUpdatePreferenceConversationsRequest = z
+        .object({
+            scope: z.discriminatedUnion("kind", [
+                z
+                    .object({
+                        kind: z.literal("project"),
+                        projectSlug: zodProjectSlug,
+                    })
+                    .strict(),
+                z.object({ kind: z.literal("no_project") }).strict(),
+            ]),
+            search: z
+                .string()
+                .trim()
+                .min(1)
+                .max(CONVERSATION_EMAIL_UPDATE_PREFERENCE_SEARCH_MAX_LENGTH)
+                .optional(),
+            cursor: zodConversationEmailUpdateCursor,
+        })
+        .strict();
+    static conversationEmailUpdatePreferenceConversationsResponse =
+        z.discriminatedUnion("success", [
+            z
+                .object({
+                    success: z.literal(true),
+                    conversations: z.array(
+                        zodConversationEmailUpdatePreferenceConversation,
+                    ),
+                    nextCursor: zodConversationEmailUpdateCursor.optional(),
+                })
+                .strict(),
+            z
+                .object({
+                    success: z.literal(false),
+                    reason: z.enum([
+                        "verified_email_required",
+                        "preferences_unavailable",
+                    ]),
+                })
+                .strict(),
+        ]);
     static conversationEmailUpdatePreferenceUpdateRequest =
         z.discriminatedUnion("operation", [
             z
@@ -3570,7 +3860,9 @@ export class Dto {
                         .object({
                             kind: z.literal("no_project"),
                             conversations: z
-                                .array(zodConversationEmailUpdateActionConversation)
+                                .array(
+                                    zodConversationEmailUpdateActionConversation,
+                                )
                                 .min(1),
                         })
                         .strict(),
@@ -3804,6 +4096,21 @@ export type GetOrganizationDetailsRequest = z.infer<
 >;
 export type GetOrganizationDetailsResponse = z.infer<
     typeof Dto.getOrganizationDetailsResponse
+>;
+export type AdminNoProjectEmailUpdatesConfiguration = z.infer<
+    typeof zodAdminNoProjectEmailUpdatesConfiguration
+>;
+export type GetAdminNoProjectEmailUpdatesRequest = z.infer<
+    typeof Dto.getAdminNoProjectEmailUpdatesRequest
+>;
+export type GetAdminNoProjectEmailUpdatesResponse = z.infer<
+    typeof Dto.getAdminNoProjectEmailUpdatesResponse
+>;
+export type UpdateAdminNoProjectEmailUpdatesRequest = z.infer<
+    typeof Dto.updateAdminNoProjectEmailUpdatesRequest
+>;
+export type UpdateAdminNoProjectEmailUpdatesResponse = z.infer<
+    typeof Dto.updateAdminNoProjectEmailUpdatesResponse
 >;
 export type OrganizationMember = z.infer<typeof Dto.organizationMember>;
 export type GetOrganizationMembersResponse = z.infer<
@@ -4167,8 +4474,17 @@ export type ConversationEmailUpdatePreferencesRequest = z.infer<
 export type ConversationEmailUpdatePreferencesRequestInput = z.input<
     typeof Dto.conversationEmailUpdatePreferencesRequest
 >;
+export type ConversationEmailUpdatePreferenceFocus = z.infer<
+    typeof zodConversationEmailUpdatePreferenceFocus
+>;
 export type ConversationEmailUpdatePreferencesResponse = z.infer<
     typeof Dto.conversationEmailUpdatePreferencesResponse
+>;
+export type ConversationEmailUpdatePreferenceConversationsRequest = z.infer<
+    typeof Dto.conversationEmailUpdatePreferenceConversationsRequest
+>;
+export type ConversationEmailUpdatePreferenceConversationsResponse = z.infer<
+    typeof Dto.conversationEmailUpdatePreferenceConversationsResponse
 >;
 export type ConversationEmailUpdatePreferenceUpdateRequest = z.infer<
     typeof Dto.conversationEmailUpdatePreferenceUpdateRequest
@@ -4220,6 +4536,9 @@ export type ConversationEmailUpdateSelection = z.infer<
 >;
 export type ConversationEmailUpdatePreferenceGroup = z.infer<
     typeof zodConversationEmailUpdatePreferenceGroup
+>;
+export type ConversationEmailUpdatePreferenceAvatar = z.infer<
+    typeof zodConversationEmailUpdatePreferenceAvatar
 >;
 export type ConversationEmailUpdateActionResolveRequest = z.infer<
     typeof Dto.conversationEmailUpdateActionResolveRequest
