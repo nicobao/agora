@@ -92,6 +92,17 @@ const projectGroup = {
   ],
 } satisfies ConversationEmailUpdatePreferenceGroup;
 
+const inheritedProjectGroup = {
+  ...projectGroup,
+  conversations: [
+    {
+      ...projectGroup.conversations[0],
+      preferenceKind: "project_inherited",
+      state: "undisclosed",
+    },
+  ],
+} satisfies ConversationEmailUpdatePreferenceGroup;
+
 const noProjectGroup = {
   kind: "no_project",
   availability: "available",
@@ -249,6 +260,72 @@ describe("ConversationUpdatePreferenceSettings", () => {
     expect(container.textContent).toContain("Error");
     expect(container.textContent).not.toContain("Project One");
     expect(showNotifyMessage).not.toHaveBeenCalled();
+  });
+
+  it("keeps an inherited switch tied to its project while globally paused", async () => {
+    api.getPreferences.mockResolvedValue({
+      success: true,
+      globalPaused: false,
+      groups: [inheritedProjectGroup],
+      nextCursor: undefined,
+    });
+    api.updatePreference.mockResolvedValue({
+      success: true,
+      result: { operation: "set_global_pause", globalPaused: true },
+    });
+
+    const container = mountComponent();
+    await flushPromises();
+    getButton(container, "Receive Email Updates").click();
+    await flushPromises();
+
+    expect(getButton(container, "Receive Email Updates").dataset.enabled).toBe(
+      "false"
+    );
+    expect(
+      getButton(container, "Receive Email Updates for Conversation One").dataset
+        .enabled
+    ).toBe("true");
+  });
+
+  it("saves an explicit override for an inherited conversation", async () => {
+    api.getPreferences.mockResolvedValue({
+      success: true,
+      globalPaused: false,
+      groups: [inheritedProjectGroup],
+      nextCursor: undefined,
+    });
+    api.updatePreference.mockResolvedValue({
+      success: true,
+      result: {
+        operation: "set_conversation_preference",
+        globalResumed: false,
+        conversationPreferences: [
+          {
+            conversationSlugId: "conversation-one",
+            state: "disabled",
+            resolvedEnabled: false,
+          },
+        ],
+      },
+    });
+
+    const container = mountComponent();
+    await flushPromises();
+    expect(container.textContent).toContain("Inherited from project");
+    getButton(container, "Receive Email Updates for Conversation One").click();
+    await flushPromises();
+
+    expect(api.updatePreference).toHaveBeenCalledWith({
+      operation: "set_conversation_preference",
+      conversationSlugId: "conversation-one",
+      enabled: false,
+      source: "settings",
+    });
+    expect(container.textContent).not.toContain("Inherited from project");
+    expect(showNotifyMessage).toHaveBeenCalledWith(
+      "Your email update preference was saved."
+    );
   });
 
   it("disables stale pagination and mutations while a changed query loads", async () => {
@@ -498,7 +575,9 @@ describe("ConversationUpdatePreferenceSettings", () => {
       "false"
     );
     expect(getButton(container, "Load more")).toBeDefined();
-    expect(showNotifyMessage).not.toHaveBeenCalled();
+    expect(showNotifyMessage).toHaveBeenCalledWith(
+      "Your email update preference was saved."
+    );
   });
 
   it("shows paused delivery as off and turns it back on", async () => {
@@ -533,7 +612,9 @@ describe("ConversationUpdatePreferenceSettings", () => {
     expect(container.textContent).toContain(
       "You’ll receive updates from your selected projects and conversations."
     );
-    expect(showNotifyMessage).not.toHaveBeenCalled();
+    expect(showNotifyMessage).toHaveBeenCalledWith(
+      "Your email update preference was saved."
+    );
   });
 
   it("reports when a project opt-in resumes global Email Updates", async () => {
@@ -974,6 +1055,9 @@ describe("ConversationUpdatePreferenceSettings", () => {
       getButton(container, "Email Updates by default for Project One").dataset
         .enabled
     ).toBe("false");
+    expect(showNotifyMessage).toHaveBeenCalledWith(
+      "Your email update preference was saved."
+    );
   });
 
   it("serializes writes that can change the effective preference hierarchy", async () => {

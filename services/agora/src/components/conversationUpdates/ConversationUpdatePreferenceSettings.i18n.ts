@@ -17,6 +17,7 @@ export interface ConversationUpdatePreferenceSettingsTranslations {
   verifiedEmailRequired: string;
   preferencesUnavailable: string;
   morePreferencesUnavailable: string;
+  savePreferenceSuccess: string;
   savePreferenceError: string;
 }
 
@@ -49,6 +50,7 @@ export const conversationUpdatePreferenceSettingsTranslations: Record<
       "Email Update preferences are unavailable right now.",
     morePreferencesUnavailable:
       "More Email Update preferences could not be loaded.",
+    savePreferenceSuccess: "Your email update preference was saved.",
     savePreferenceError: "Couldn’t save your email update preference.",
   },
   es: {
@@ -77,6 +79,8 @@ export const conversationUpdatePreferenceSettingsTranslations: Record<
       "Las preferencias de seguimiento por correo no están disponibles ahora.",
     morePreferencesUnavailable:
       "No se pudieron cargar más preferencias de seguimiento por correo.",
+    savePreferenceSuccess:
+      "Se guardó su preferencia de seguimiento por correo.",
     savePreferenceError:
       "No se pudo guardar su preferencia de seguimiento por correo.",
   },
@@ -106,6 +110,8 @@ export const conversationUpdatePreferenceSettingsTranslations: Record<
       "Les préférences de suivi par e-mail sont indisponibles pour le moment.",
     morePreferencesUnavailable:
       "Impossible de charger davantage de préférences de suivi par e-mail.",
+    savePreferenceSuccess:
+      "Votre préférence de suivi par e-mail a été enregistrée.",
     savePreferenceError:
       "Impossible d’enregistrer votre préférence de suivi par e-mail.",
   },
@@ -130,6 +136,7 @@ export const conversationUpdatePreferenceSettingsTranslations: Record<
     verifiedEmailRequired: "請先驗證電子郵件地址，再變更電子郵件更新偏好。",
     preferencesUnavailable: "目前無法使用電子郵件更新偏好。",
     morePreferencesUnavailable: "無法載入更多電子郵件更新偏好。",
+    savePreferenceSuccess: "你的電子郵件更新偏好已儲存。",
     savePreferenceError: "無法儲存你的電子郵件更新偏好。",
   },
   "zh-Hans": {
@@ -153,6 +160,7 @@ export const conversationUpdatePreferenceSettingsTranslations: Record<
     verifiedEmailRequired: "请先验证电子邮件地址，再更改电子邮件更新偏好。",
     preferencesUnavailable: "目前无法使用电子邮件更新偏好。",
     morePreferencesUnavailable: "无法加载更多电子邮件更新偏好。",
+    savePreferenceSuccess: "你的电子邮件更新偏好已保存。",
     savePreferenceError: "无法保存你的电子邮件更新偏好。",
   },
   ja: {
@@ -177,6 +185,7 @@ export const conversationUpdatePreferenceSettingsTranslations: Record<
       "メール更新設定を変更する前に、メールアドレスを確認してください。",
     preferencesUnavailable: "メール更新設定は現在利用できません。",
     morePreferencesUnavailable: "メール更新設定をさらに読み込めませんでした。",
+    savePreferenceSuccess: "メール更新設定を保存しました。",
     savePreferenceError: "メール更新設定を保存できませんでした。",
   },
   ar: {
@@ -202,6 +211,7 @@ export const conversationUpdatePreferenceSettingsTranslations: Record<
     preferencesUnavailable: "تفضيلات تحديثات البريد الإلكتروني غير متاحة الآن.",
     morePreferencesUnavailable:
       "تعذر تحميل المزيد من تفضيلات تحديثات البريد الإلكتروني.",
+    savePreferenceSuccess: "تم حفظ تفضيل تحديثات البريد الإلكتروني.",
     savePreferenceError: "تعذر حفظ تفضيل تحديثات البريد الإلكتروني.",
   },
   fa: {
@@ -228,6 +238,7 @@ export const conversationUpdatePreferenceSettingsTranslations: Record<
     preferencesUnavailable: "تنظیمات به‌روزرسانی ایمیلی اکنون در دسترس نیست.",
     morePreferencesUnavailable:
       "تنظیمات بیشتری از به‌روزرسانی ایمیلی بارگیری نشد.",
+    savePreferenceSuccess: "تنظیم به‌روزرسانی ایمیلی شما ذخیره شد.",
     savePreferenceError: "تنظیم به‌روزرسانی ایمیلی شما ذخیره نشد.",
   },
   he: {
@@ -251,6 +262,7 @@ export const conversationUpdatePreferenceSettingsTranslations: Record<
     verifiedEmailRequired: "יש לאמת כתובת דוא״ל לפני שינוי העדפות העדכונים.",
     preferencesUnavailable: "העדפות העדכונים בדוא״ל אינן זמינות כרגע.",
     morePreferencesUnavailable: "לא ניתן לטעון העדפות נוספות לעדכונים בדוא״ל.",
+    savePreferenceSuccess: "העדפת העדכונים בדוא״ל נשמרה.",
     savePreferenceError: "לא ניתן לשמור את העדפת העדכונים בדוא״ל.",
   },
   ky: {
@@ -278,6 +290,7 @@ export const conversationUpdatePreferenceSettingsTranslations: Record<
       "Электрондук почта жаңыртуу жөндөөлөрү азыр жеткиликсиз.",
     morePreferencesUnavailable:
       "Кошумча электрондук почта жаңыртуу жөндөөлөрү жүктөлгөн жок.",
+    savePreferenceSuccess: "Электрондук почта жаңыртуу жөндөөңүз сакталды.",
     savePreferenceError: "Электрондук почта жаңыртуу жөндөөңүз сакталган жок.",
   },
   ru: {
@@ -306,6 +319,8 @@ export const conversationUpdatePreferenceSettingsTranslations: Record<
       "Настройки обновлений по электронной почте сейчас недоступны.",
     morePreferencesUnavailable:
       "Не удалось загрузить дополнительные настройки обновлений по электронной почте.",
+    savePreferenceSuccess:
+      "Настройка обновлений по электронной почте сохранена.",
     savePreferenceError:
       "Не удалось сохранить настройку обновлений по электронной почте.",
   },

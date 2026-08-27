@@ -15,6 +15,20 @@ export interface ConversationUpdatesReachState {
   effectiveEmailUpdatesEnabled: boolean;
 }
 
+export function getNewConversationDefaultParticipationMode({
+  participationMode,
+  effectiveEmailUpdatesEnabled,
+  applyEmailVerificationDefault,
+}: ConversationUpdatesReachState & {
+  applyEmailVerificationDefault: boolean;
+}): ParticipationMode {
+  if (applyEmailVerificationDefault && effectiveEmailUpdatesEnabled) {
+    return "email_verification";
+  }
+
+  return participationMode;
+}
+
 export function areConversationUpdatesReachStatesEqual({
   left,
   right,

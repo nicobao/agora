@@ -88,9 +88,10 @@ vi.mock("src/utils/actions/definitions/content-actions", () => ({
       confirmationState: ref({
         isVisible: false,
         message: "",
-        confirmText: "",
-        cancelText: "",
-        variant: "default",
+        actions: {
+          cancel: { label: "Cancel", appearance: "secondary-outlined" },
+          confirm: { label: "Confirm", appearance: "primary" },
+        },
       }),
       showPostActions: () => {
         dialogState.value = {

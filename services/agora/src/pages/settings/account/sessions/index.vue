@@ -61,27 +61,30 @@
     v-model="showRevokeDialog"
     :title="t('revokeTitle')"
     :message="revokeMessage"
-    :confirm-text="t('confirm')"
-    :cancel-text="t('cancel')"
-    variant="warning"
+    :actions="{
+      cancel: { label: t('cancel'), appearance: 'secondary-outlined' },
+      confirm: { label: t('confirm'), appearance: 'warning' },
+    }"
     @confirm="confirmSessionRevocation"
   />
   <ZKConfirmDialog
     v-model="showLogoutAllDialog"
     :title="t('logoutAllTitle')"
     :message="t('logoutAllMessage')"
-    :confirm-text="t('confirm')"
-    :cancel-text="t('cancel')"
-    variant="warning"
+    :actions="{
+      cancel: { label: t('cancel'), appearance: 'secondary-outlined' },
+      confirm: { label: t('confirm'), appearance: 'warning' },
+    }"
     @confirm="logoutAllSessions"
   />
   <ZKConfirmDialog
     v-model="showLocalOnlyDialog"
     :title="t('localOnlyTitle')"
     :message="t('localOnlyMessage')"
-    :confirm-text="t('clearLocalData')"
-    :cancel-text="t('retry')"
-    variant="destructive"
+    :actions="{
+      cancel: { label: t('retry'), appearance: 'secondary-outlined' },
+      confirm: { label: t('clearLocalData'), appearance: 'danger' },
+    }"
     @confirm="clearThisDeviceOnly"
     @cancel="logoutAllSessions"
   />

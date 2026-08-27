@@ -47,9 +47,7 @@
   <ZKConfirmDialog
     v-model="commentActions.confirmationState.value.isVisible"
     :message="commentActions.confirmationState.value.message"
-    :confirm-text="commentActions.confirmationState.value.confirmText"
-    :cancel-text="commentActions.confirmationState.value.cancelText"
-    :variant="commentActions.confirmationState.value.variant"
+    :actions="commentActions.confirmationState.value.actions"
     @confirm="commentActions.handleConfirmation"
     @cancel="commentActions.handleConfirmationCancel"
   />

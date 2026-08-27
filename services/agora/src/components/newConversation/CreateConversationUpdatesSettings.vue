@@ -96,9 +96,8 @@ const settingMode = computed<SettingMode>(() => {
 const dialogSubtitle = computed(() => t("manualUpdatesSubtitle"));
 const controlLabel = computed(() => {
   const value = displayEnabled.value ? t("on") : t("off");
-  const inheritedSource =
-    props.scopeKind === "project" ? t("projectDefault") : t("noProjectDefault");
-  const source = override.value === undefined ? inheritedSource : t("override");
+  const source =
+    override.value === undefined ? t("defaultLabel") : t("override");
   return t("controlLabel", { value, source });
 });
 const settingOptions = computed<readonly SettingOption[]>(() => {

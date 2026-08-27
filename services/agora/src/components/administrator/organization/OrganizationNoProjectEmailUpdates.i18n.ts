@@ -117,7 +117,7 @@ export const organizationNoProjectEmailUpdatesTranslations: Record<
       "Utilisé comme contact suivi des participants pour les conversations créées sans projet répertorié.",
     contactEmailLabel: "E-mail de contact",
     contactInUse:
-      "Désactivez le réglage Sans projet et toutes les dérogations avant de supprimer ce contact.",
+      "Désactivez le réglage Sans projet et tous les réglages spécifiques avant de supprimer ce contact.",
     contactNameLabel: "Nom du contact",
     contactTitle: "Contact des participants sans projet",
     deleteConfirmation: "Supprimer le contact des participants sans projet ?",

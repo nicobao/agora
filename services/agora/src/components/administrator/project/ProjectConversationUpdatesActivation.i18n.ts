@@ -125,13 +125,13 @@ export const projectConversationUpdatesActivationTranslations: Record<
       "Impossible d’enregistrer le réglage par défaut des nouvelles par e-mail.",
     editParticipantContact: "Modifier le contact des participants",
     listedDefaultDescription:
-      "Les conversations de ce projet héritent de ce réglage, sauf dérogation d'un responsable.",
+      "Les conversations de ce projet héritent de ce réglage, sauf réglage spécifique d'un responsable.",
     listedDescription:
       "Définissez le réglage par défaut des conversations de {projectTitle}.",
     missingContact:
       "Ajoutez une adresse e-mail de contact suivie pour les participants avant d'envoyer des nouvelles.",
     noProjectDefaultDescription:
-      "Les conversations sans projet héritent de ce réglage, sauf dérogation d'un responsable.",
+      "Les conversations sans projet héritent de ce réglage, sauf réglage spécifique d'un responsable.",
     noProjectDescription:
       "Définissez le réglage par défaut des conversations créées sans projet répertorié.",
     title: "Nouvelles par e-mail",

@@ -224,9 +224,10 @@
       v-model="showDeleteConfirmation"
       :title="t('deleteTitle')"
       :message="t('deleteMessage')"
-      :confirm-text="t('remove')"
-      :cancel-text="t('cancel')"
-      variant="destructive"
+      :actions="{
+        cancel: { label: t('cancel'), appearance: 'secondary-outlined' },
+        confirm: { label: t('remove'), appearance: 'danger' },
+      }"
       @confirm="removePendingDocument"
     />
   </ZKCard>

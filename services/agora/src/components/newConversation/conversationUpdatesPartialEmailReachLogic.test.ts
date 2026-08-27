@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   areConversationUpdatesReachStatesEqual,
+  getNewConversationDefaultParticipationMode,
   getPartialEmailReachParticipationMode,
   getPartialEmailReachWarning,
   getUnacknowledgedPartialEmailReachWarning,
@@ -10,6 +11,43 @@ import {
 } from "./conversationUpdatesPartialEmailReachLogic";
 
 describe("conversationUpdatesPartialEmailReachLogic", () => {
+  it("defaults initial email-update conversations to email verification", () => {
+    expect(
+      getNewConversationDefaultParticipationMode({
+        participationMode: "account_required",
+        effectiveEmailUpdatesEnabled: true,
+        applyEmailVerificationDefault: true,
+      })
+    ).toBe("email_verification");
+  });
+
+  it("defaults a new post-as context to email verification", () => {
+    expect(
+      getNewConversationDefaultParticipationMode({
+        participationMode: "guest",
+        effectiveEmailUpdatesEnabled: true,
+        applyEmailVerificationDefault: true,
+      })
+    ).toBe("email_verification");
+  });
+
+  it.each([
+    {
+      participationMode: "account_required",
+      effectiveEmailUpdatesEnabled: false,
+      applyEmailVerificationDefault: true,
+    },
+    {
+      participationMode: "account_required",
+      effectiveEmailUpdatesEnabled: true,
+      applyEmailVerificationDefault: false,
+    },
+  ] as const)("preserves a non-initial or explicit mode", (state) => {
+    expect(getNewConversationDefaultParticipationMode(state)).toBe(
+      state.participationMode
+    );
+  });
+
   it.each([
     ["account_required", "account_required"],
     ["guest", "guest"],

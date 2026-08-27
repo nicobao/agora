@@ -251,9 +251,13 @@
     v-model="showDeleteConfirmDialog"
     :title="t('deleteButton')"
     :message="t('deleteConfirmMessage')"
-    :confirm-text="t('confirmDeleteButton')"
-    :cancel-text="t('cancelButton')"
-    variant="destructive"
+    :actions="{
+      cancel: {
+        label: t('cancelButton'),
+        appearance: 'secondary-outlined',
+      },
+      confirm: { label: t('confirmDeleteButton'), appearance: 'danger' },
+    }"
     @confirm="confirmDeleteOrganization"
   />
 
@@ -261,9 +265,16 @@
     v-model="showSlugConfirmDialog"
     :title="t('slugWarningTitle')"
     :message="t('slugWarningDescription')"
-    :confirm-text="t('confirmSlugChangeButton')"
-    :cancel-text="t('cancelButton')"
-    variant="destructive"
+    :actions="{
+      cancel: {
+        label: t('cancelButton'),
+        appearance: 'secondary-outlined',
+      },
+      confirm: {
+        label: t('confirmSlugChangeButton'),
+        appearance: 'danger',
+      },
+    }"
     @confirm="confirmSlugUpdate"
   />
 </template>

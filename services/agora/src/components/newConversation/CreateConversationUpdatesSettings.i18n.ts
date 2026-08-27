@@ -2,6 +2,7 @@ import type { SupportedDisplayLanguageCodes } from "src/shared/languages";
 
 export interface CreateConversationUpdatesSettingsTranslations {
   controlLabel: string;
+  defaultLabel: string;
   emailUpdates: string;
   enableAriaLabel: string;
   inheritsDescription: string;
@@ -20,6 +21,7 @@ export interface CreateConversationUpdatesSettingsTranslations {
 
 const en: CreateConversationUpdatesSettingsTranslations = {
   controlLabel: "Email Updates: {value} ({source})",
+  defaultLabel: "default",
   emailUpdates: "Email Updates",
   enableAriaLabel: "Enable Email Updates for {conversationTitle}",
   inheritsDescription: "Uses the {defaultValue} default from {scopeLabel}.",
@@ -46,6 +48,7 @@ export const createConversationUpdatesSettingsTranslations: Record<
   en,
   ar: {
     controlLabel: "تحديثات البريد الإلكتروني: {value} ({source})",
+    defaultLabel: "افتراضي",
     emailUpdates: "تحديثات البريد الإلكتروني",
     enableAriaLabel: "تفعيل تحديثات البريد الإلكتروني لـ {conversationTitle}",
     inheritsDescription:
@@ -67,6 +70,7 @@ export const createConversationUpdatesSettingsTranslations: Record<
   },
   es: {
     controlLabel: "Novedades por correo: {value} ({source})",
+    defaultLabel: "predeterminado",
     emailUpdates: "Novedades por correo",
     enableAriaLabel:
       "Activar Novedades de la conversación para {conversationTitle}",
@@ -89,6 +93,7 @@ export const createConversationUpdatesSettingsTranslations: Record<
   },
   fa: {
     controlLabel: "به‌روزرسانی‌های ایمیلی: {value} ({source})",
+    defaultLabel: "پیش‌فرض",
     emailUpdates: "به‌روزرسانی‌های ایمیلی",
     enableAriaLabel: "فعال‌کردن به‌روزرسانی ایمیلی برای {conversationTitle}",
     inheritsDescription:
@@ -110,6 +115,7 @@ export const createConversationUpdatesSettingsTranslations: Record<
   },
   fr: {
     controlLabel: "Nouvelles par e-mail : {value} ({source})",
+    defaultLabel: "défaut",
     emailUpdates: "Nouvelles par e-mail",
     enableAriaLabel:
       "Activer les Nouvelles de la conversation pour {conversationTitle}",
@@ -122,7 +128,7 @@ export const createConversationUpdatesSettingsTranslations: Record<
     noProjectGroup: "le groupe Sans projet",
     off: "Désactivées",
     on: "Activées",
-    override: "dérogation",
+    override: "hérité",
     overridesDescription: "Remplace le réglage {defaultValue} de {scopeLabel}.",
     projectDefault: "réglage par défaut du projet",
     projectFallback: "le projet",
@@ -130,6 +136,7 @@ export const createConversationUpdatesSettingsTranslations: Record<
   },
   he: {
     controlLabel: "עדכוני דוא״ל: {value} ({source})",
+    defaultLabel: "ברירת מחדל",
     emailUpdates: "עדכוני דוא״ל",
     enableAriaLabel: "הפעלת עדכוני דוא״ל עבור {conversationTitle}",
     inheritsDescription:
@@ -150,6 +157,7 @@ export const createConversationUpdatesSettingsTranslations: Record<
   },
   ja: {
     controlLabel: "メール更新：{value}（{source}）",
+    defaultLabel: "既定",
     emailUpdates: "メール更新",
     enableAriaLabel: "{conversationTitle}のメール更新を有効にする",
     inheritsDescription: "{scopeLabel}の既定値「{defaultValue}」を使用します。",
@@ -170,6 +178,7 @@ export const createConversationUpdatesSettingsTranslations: Record<
   },
   ky: {
     controlLabel: "Электрондук жаңыртуулар: {value} ({source})",
+    defaultLabel: "демейки",
     emailUpdates: "Электрондук жаңыртуулар",
     enableAriaLabel:
       "{conversationTitle} үчүн электрондук жаңыртууларды күйгүзүү",
@@ -192,6 +201,7 @@ export const createConversationUpdatesSettingsTranslations: Record<
   },
   ru: {
     controlLabel: "Почтовые обновления: {value} ({source})",
+    defaultLabel: "по умолчанию",
     emailUpdates: "Почтовые обновления",
     enableAriaLabel: "Включить почтовые обновления для «{conversationTitle}»",
     inheritsDescription:
@@ -213,6 +223,7 @@ export const createConversationUpdatesSettingsTranslations: Record<
   },
   "zh-Hans": {
     controlLabel: "电子邮件更新：{value}（{source}）",
+    defaultLabel: "默认",
     emailUpdates: "电子邮件更新",
     enableAriaLabel: "为{conversationTitle}开启电子邮件更新",
     inheritsDescription: "使用{scopeLabel}的{defaultValue}默认值。",
@@ -230,6 +241,7 @@ export const createConversationUpdatesSettingsTranslations: Record<
   },
   "zh-Hant": {
     controlLabel: "電子郵件更新：{value}（{source}）",
+    defaultLabel: "預設",
     emailUpdates: "電子郵件更新",
     enableAriaLabel: "為{conversationTitle}開啟電子郵件更新",
     inheritsDescription: "使用{scopeLabel}的{defaultValue}預設值。",
