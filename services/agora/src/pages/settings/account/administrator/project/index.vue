@@ -776,9 +776,16 @@
       v-model="showProjectSlugConfirmDialog"
       :title="t('slugWarningTitle')"
       :message="t('slugWarningDescription')"
-      :confirm-text="t('confirmSlugChangeButton')"
-      :cancel-text="t('cancelButton')"
-      variant="destructive"
+      :actions="{
+        cancel: {
+          label: t('cancelButton'),
+          appearance: 'secondary-outlined',
+        },
+        confirm: {
+          label: t('confirmSlugChangeButton'),
+          appearance: 'danger',
+        },
+      }"
       @confirm="saveProjectSlug"
     />
 
@@ -786,9 +793,16 @@
       v-model="showProjectDeleteConfirmDialog"
       :title="t('deleteProjectTitle')"
       :message="t('deleteProjectDescription')"
-      :confirm-text="t('confirmDeleteProjectButton')"
-      :cancel-text="t('cancelButton')"
-      variant="destructive"
+      :actions="{
+        cancel: {
+          label: t('cancelButton'),
+          appearance: 'secondary-outlined',
+        },
+        confirm: {
+          label: t('confirmDeleteProjectButton'),
+          appearance: 'danger',
+        },
+      }"
       @confirm="deleteSelectedProject"
     />
   </div>

@@ -456,9 +456,13 @@
     <ZKConfirmDialog
       v-model="showRemoveDialog"
       :message="removeDialogMessage"
-      :confirm-text="removeDialogConfirmText"
-      :cancel-text="texts.cancelLabel"
-      variant="destructive"
+      :actions="{
+        cancel: {
+          label: texts.cancelLabel,
+          appearance: 'secondary-outlined',
+        },
+        confirm: { label: removeDialogConfirmText, appearance: 'danger' },
+      }"
       @confirm="handleConfirmRemoval"
     />
 
@@ -483,8 +487,16 @@
     <ZKConfirmDialog
       v-model="showPublicAggregateSuppressionConfirm"
       :title="publicAggregateSuppressionConfirmTitle"
-      :confirm-text="publicAggregateSuppressionConfirmButtonLabel"
-      :cancel-text="texts.cancelLabel"
+      :actions="{
+        cancel: {
+          label: texts.cancelLabel,
+          appearance: 'secondary-outlined',
+        },
+        confirm: {
+          label: publicAggregateSuppressionConfirmButtonLabel,
+          appearance: 'primary',
+        },
+      }"
       @confirm="confirmPublicAggregateSuppression"
       @cancel="pendingPublicAggregateSuppression = null"
     >

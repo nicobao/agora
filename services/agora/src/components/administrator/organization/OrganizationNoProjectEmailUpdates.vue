@@ -82,9 +82,10 @@
     v-model="showDeleteConfirmDialog"
     :title="t('deleteContact')"
     :message="t('deleteConfirmation')"
-    :confirm-text="t('deleteContact')"
-    :cancel-text="t('cancel')"
-    variant="destructive"
+    :actions="{
+      cancel: { label: t('cancel'), appearance: 'secondary-outlined' },
+      confirm: { label: t('deleteContact'), appearance: 'danger' },
+    }"
     @confirm="deleteContact"
   />
 </template>

@@ -66,9 +66,7 @@
   <ZKConfirmDialog
     v-model="postActions.confirmationState.value.isVisible"
     :message="postActions.confirmationState.value.message"
-    :confirm-text="postActions.confirmationState.value.confirmText"
-    :cancel-text="postActions.confirmationState.value.cancelText"
-    :variant="postActions.confirmationState.value.variant"
+    :actions="postActions.confirmationState.value.actions"
     @confirm="postActions.handleConfirmation"
     @cancel="postActions.handleConfirmationCancel"
   />
@@ -77,9 +75,13 @@
   <ZKConfirmDialog
     v-model="showCloseDialog"
     :message="t('closeConfirmMessage')"
-    :confirm-text="t('closeConfirmButton')"
-    :cancel-text="t('cancelButton')"
-    variant="default"
+    :actions="{
+      cancel: {
+        label: t('cancelButton'),
+        appearance: 'secondary-outlined',
+      },
+      confirm: { label: t('closeConfirmButton'), appearance: 'primary' },
+    }"
     @confirm="handleCloseConfirm"
   />
 
@@ -87,9 +89,13 @@
   <ZKConfirmDialog
     v-model="showReopenDialog"
     :message="t('reopenConfirmMessage')"
-    :confirm-text="t('reopenConfirmButton')"
-    :cancel-text="t('cancelButton')"
-    variant="default"
+    :actions="{
+      cancel: {
+        label: t('cancelButton'),
+        appearance: 'secondary-outlined',
+      },
+      confirm: { label: t('reopenConfirmButton'), appearance: 'primary' },
+    }"
     @confirm="handleReopenConfirm"
   />
 </template>

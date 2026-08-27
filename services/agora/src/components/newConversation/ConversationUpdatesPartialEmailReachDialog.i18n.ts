@@ -17,7 +17,7 @@ export const conversationUpdatesPartialEmailReachDialogTranslations: Record<
   en: {
     accountPartialReach:
       "An email address is not required to create an account. Only participants who add and verify one in Settings can choose to receive your email updates.",
-    enforceEmailVerificationOnly: "Require a verified email address",
+    enforceEmailVerificationOnly: "Require only email verification",
     guestPartialReach:
       "An email address is not required to participate as a guest. Only participants who add and verify one in Settings can choose to receive your email updates.",
     keepUpdatesOn: "Keep email updates on",
@@ -67,7 +67,8 @@ export const conversationUpdatesPartialEmailReachDialogTranslations: Record<
   fr: {
     accountPartialReach:
       "Une adresse e-mail n'est pas requise pour créer un compte. Seuls les participants qui en ajoutent et vérifient une dans leurs paramètres peuvent choisir de recevoir vos nouvelles par e-mail.",
-    enforceEmailVerificationOnly: "Exiger une adresse e-mail vérifiée",
+    enforceEmailVerificationOnly:
+      "Exiger uniquement une adresse e-mail vérifiée",
     guestPartialReach:
       "Une adresse e-mail n'est pas requise pour participer en tant qu'invité. Seuls les participants qui en ajoutent et vérifient une dans leurs paramètres peuvent choisir de recevoir vos nouvelles par e-mail.",
     keepUpdatesOn: "Garder les nouvelles par e-mail activées",

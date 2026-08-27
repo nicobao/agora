@@ -132,8 +132,10 @@
     v-if="testDestinationEmail !== undefined"
     v-model="showTestSendDialog"
     :title="t('testDialogTitle')"
-    :confirm-text="t('sendTest')"
-    :cancel-text="t('cancel')"
+    :actions="{
+      cancel: { label: t('cancel'), appearance: 'secondary-outlined' },
+      confirm: { label: t('sendTest'), appearance: 'primary' },
+    }"
     @confirm="emit('test')"
   >
     <p>

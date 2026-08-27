@@ -52,6 +52,7 @@
             v-model:override-multilingual-setting="multilingualSetting"
             :selected-project-slug="selectedProjectSlug"
             :project-list="projectLanguageProjects"
+            @automatic-project-selection="prepareAutomaticProjectSelection"
             @update:selected-project-slug="updateProjectWithReachWarning"
           />
           <CreateConversationUpdatesSettings
@@ -208,6 +209,7 @@ import ConversationUpdatesPartialEmailReachDialog from "src/components/newConver
 import {
   areConversationUpdatesReachStatesEqual,
   type ConversationUpdatesReachState,
+  getNewConversationDefaultParticipationMode,
   getPartialEmailReachWarning,
   getUnacknowledgedPartialEmailReachWarning,
   type PartialEmailReachAction,
@@ -398,6 +400,7 @@ const acknowledgedPartialEmailReachState = ref<
   ConversationUpdatesReachState | undefined
 >(undefined);
 let projectOptionsRequestId = 0;
+let applyContextEmailVerificationDefault = !hasForwardSeedEntry();
 
 function getCreateConversationUpdatesReachState({
   mode,
@@ -438,9 +441,29 @@ function showReachWarningForTransition({
   }
 }
 
+function applyEmailVerificationDefault(
+  configuration: ConversationCreateEmailUpdates | undefined
+): void {
+  const reachState = getCreateConversationUpdatesReachState({
+    mode: participationMode.value,
+    override: conversationEmailUpdateEnabledOverride.value,
+    configuration,
+  });
+  participationMode.value = getNewConversationDefaultParticipationMode({
+    ...reachState,
+    applyEmailVerificationDefault: applyContextEmailVerificationDefault,
+  });
+  applyContextEmailVerificationDefault = false;
+}
+
+function prepareAutomaticProjectSelection(): void {
+  applyContextEmailVerificationDefault = true;
+}
+
 function updateParticipationModeWithReachWarning(
   mode: ParticipationMode
 ): void {
+  applyContextEmailVerificationDefault = false;
   const configuration = selectedEmailUpdatesConfiguration.value;
   const previous = getCreateConversationUpdatesReachState({
     mode: participationMode.value,
@@ -492,6 +515,7 @@ function updateProjectWithReachWarning(projectSlug: string | undefined): void {
         )?.emailUpdates;
   selectedProjectSlug.value = projectSlug;
   conversationEmailUpdateEnabledOverride.value = undefined;
+  applyEmailVerificationDefault(configuration);
   showReachWarningForTransition({
     previous,
     next: getCreateConversationUpdatesReachState({
@@ -562,13 +586,23 @@ watch(
     profileDataLoaded: profileData.value.dataLoaded,
     organizationList: profileData.value.organizationList,
   }),
-  async ({
-    isLoggedIn,
-    postAsOrganization,
-    organizationName,
-    profileDataLoaded,
-    organizationList,
-  }) => {
+  async (
+    {
+      isLoggedIn,
+      postAsOrganization,
+      organizationName,
+      profileDataLoaded,
+      organizationList,
+    },
+    previousContext
+  ) => {
+    if (
+      previousContext !== undefined &&
+      (postAsOrganization !== previousContext.postAsOrganization ||
+        organizationName !== previousContext.organizationName)
+    ) {
+      applyContextEmailVerificationDefault = true;
+    }
     const previousReachState = getCreateConversationUpdatesReachState({
       mode: participationMode.value,
       override: conversationEmailUpdateEnabledOverride.value,
@@ -620,6 +654,7 @@ watch(
 
     conversationCreateProjectOptions.value = response.projectList;
     noProjectEmailUpdates.value = response.noProjectEmailUpdates;
+    applyEmailVerificationDefault(selectedEmailUpdatesConfiguration.value);
     showReachWarningForTransition({
       previous: previousReachState,
       next: getCreateConversationUpdatesReachState({

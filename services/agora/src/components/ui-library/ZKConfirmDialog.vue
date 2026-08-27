@@ -3,7 +3,7 @@
     v-model="showDialog"
     position="bottom"
     :persistent="persistent"
-    :aria-label="title ?? message ?? confirmText"
+    :aria-label="title ?? message ?? actions.confirm.label"
   >
     <ZKBottomDialogContainer>
       <div class="confirm-dialog">
@@ -17,33 +17,23 @@
 
         <div
           class="dialog-actions"
-          :class="{ 'dialog-actions--three': alternateText !== undefined }"
+          :class="{ 'dialog-actions--three': actions.leading !== undefined }"
         >
           <PrimeButton
-            v-if="alternateText !== undefined"
-            :label="alternateText"
-            :severity="alternateSeverity"
-            outlined
-            class="alternate-button"
-            @click="handleAlternate"
-          />
-          <PrimeButton
-            :label="cancelText"
-            :severity="cancelSeverity"
-            :outlined="cancelOutlined"
-            class="cancel-button"
-            @click="handleCancel"
-          />
-          <PrimeButton
-            :label="confirmText"
-            :severity="confirmSeverity"
-            :outlined="confirmOutlined"
-            class="confirm-button"
+            v-for="action in orderedActions"
+            :key="action.name"
+            :label="action.label"
+            :severity="
+              actionPresentationByAppearance[action.appearance].severity
+            "
+            :outlined="
+              actionPresentationByAppearance[action.appearance].outlined
+            "
+            class="dialog-action"
             :class="{
-              'confirm-button--warning-filled':
-                variant === 'warning' && !confirmOutlined,
+              'dialog-action--warning-filled': action.appearance === 'warning',
             }"
-            @click="handleConfirm"
+            @click="handleAction(action.name)"
           />
         </div>
       </div>
@@ -53,9 +43,14 @@
 
 <script setup lang="ts">
 import Button from "primevue/button";
-import { computed, watch } from "vue";
+import { computed } from "vue";
 
 import ZKBottomDialogContainer from "./ZKBottomDialogContainer.vue";
+import type {
+  ConfirmDialogAction,
+  ConfirmDialogActionAppearance,
+  ConfirmDialogActions,
+} from "./ZKConfirmDialog.types";
 
 defineOptions({
   components: {
@@ -66,85 +61,74 @@ defineOptions({
 const props = withDefaults(defineProps<Props>(), {
   title: undefined,
   message: undefined,
-  confirmText: "Confirm",
-  cancelText: "Cancel",
-  cancelSeverity: "secondary",
-  cancelOutlined: true,
-  confirmOutlined: false,
-  alternateText: undefined,
-  alternateSeverity: "primary",
   persistent: false,
-  variant: "default",
 });
 
 const emit = defineEmits<Emits>();
 
+type ConfirmDialogActionName = keyof ConfirmDialogActions;
+
+interface OrderedConfirmDialogAction extends ConfirmDialogAction {
+  readonly name: ConfirmDialogActionName;
+}
+
 interface Props {
+  actions: ConfirmDialogActions;
   title?: string;
   message?: string;
-  confirmText?: string;
-  cancelText?: string;
-  cancelSeverity?: "primary" | "secondary";
-  cancelOutlined?: boolean;
-  confirmOutlined?: boolean;
-  alternateText?: string;
-  alternateSeverity?: "primary" | "secondary";
   persistent?: boolean;
-  variant?: "default" | "destructive" | "warning";
 }
 
 interface Emits {
   (e: "confirm"): void;
   (e: "cancel"): void;
-  (e: "alternate"): void;
-  (e: "dialogClosed"): void;
+  (e: "leading"): void;
 }
 
 const showDialog = defineModel<boolean>({ required: true });
-const confirmSeverityByVariant = {
-  default: "primary",
-  destructive: "danger",
-  warning: "warn",
+const actionPresentationByAppearance = {
+  primary: { severity: "primary", outlined: false },
+  "primary-outlined": { severity: "primary", outlined: true },
+  secondary: { severity: "secondary", outlined: false },
+  "secondary-outlined": { severity: "secondary", outlined: true },
+  danger: { severity: "danger", outlined: false },
+  "danger-outlined": { severity: "danger", outlined: true },
+  warning: { severity: "warn", outlined: false },
+  "warning-outlined": { severity: "warn", outlined: true },
 } satisfies Record<
-  NonNullable<Props["variant"]>,
-  "primary" | "danger" | "warn"
+  ConfirmDialogActionAppearance,
+  {
+    severity: "primary" | "secondary" | "danger" | "warn";
+    outlined: boolean;
+  }
 >;
-const confirmSeverity = computed(() => confirmSeverityByVariant[props.variant]);
 
-/**
- * Handle confirm button click
- */
-const handleConfirm = (): void => {
-  emit("confirm");
-  showDialog.value = false;
-};
+const orderedActions = computed<readonly OrderedConfirmDialogAction[]>(() => {
+  const { leading, cancel, confirm } = props.actions;
+  const requiredActions: readonly OrderedConfirmDialogAction[] = [
+    { name: "cancel", ...cancel },
+    { name: "confirm", ...confirm },
+  ];
 
-/**
- * Handle cancel button click
- */
-const handleCancel = (): void => {
-  emit("cancel");
-  showDialog.value = false;
-};
+  return leading === undefined
+    ? requiredActions
+    : [{ name: "leading", ...leading }, ...requiredActions];
+});
 
-function handleAlternate(): void {
-  emit("alternate");
+function handleAction(actionName: ConfirmDialogActionName): void {
+  switch (actionName) {
+    case "leading":
+      emit("leading");
+      break;
+    case "cancel":
+      emit("cancel");
+      break;
+    case "confirm":
+      emit("confirm");
+      break;
+  }
   showDialog.value = false;
 }
-
-/**
- * Handle dialog close
- */
-const handleDialogClose = (): void => {
-  emit("dialogClosed");
-};
-
-// Watch dialog state changes
-watch(showDialog, (newValue) => {
-  if (!newValue) {
-    handleDialogClose();
-  }
-});
 </script>
 
 <style scoped lang="scss">
@@ -180,13 +164,11 @@ watch(showDialog, (newValue) => {
   gap: 1rem;
   justify-content: stretch;
 
-  .cancel-button,
-  .alternate-button,
-  .confirm-button {
+  .dialog-action {
     flex: 1;
   }
 
-  .confirm-button--warning-filled.p-button.p-button-warn {
+  .dialog-action--warning-filled.p-button.p-button-warn {
     color: white;
     background-color: $warning;
     border-color: $warning;

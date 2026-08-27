@@ -3,18 +3,24 @@
     v-model="showDialog"
     :title="t('partialReachTitle')"
     :message="warningMessage"
-    :confirm-text="t('keepUpdatesOn')"
-    :cancel-text="t('enforceEmailVerificationOnly')"
-    cancel-severity="primary"
-    :cancel-outlined="true"
-    :alternate-text="t('turnUpdatesOff')"
-    alternate-severity="primary"
-    :confirm-outlined="true"
+    :actions="{
+      leading: {
+        label: t('enforceEmailVerificationOnly'),
+        appearance: 'primary',
+      },
+      cancel: {
+        label: t('turnUpdatesOff'),
+        appearance: 'primary-outlined',
+      },
+      confirm: {
+        label: t('keepUpdatesOn'),
+        appearance: 'warning-outlined',
+      },
+    }"
     :persistent="true"
-    variant="warning"
     @confirm="emitAction('keep_updates_on')"
-    @cancel="emitAction('enforce_email_verification')"
-    @alternate="emitAction('turn_updates_off')"
+    @cancel="emitAction('turn_updates_off')"
+    @leading="emitAction('enforce_email_verification')"
   />
 </template>
 

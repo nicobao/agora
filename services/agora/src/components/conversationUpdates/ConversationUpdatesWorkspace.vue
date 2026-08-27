@@ -152,8 +152,10 @@
   <ZKConfirmDialog
     v-model="showSendDialog"
     :title="t('sendDialogTitle')"
-    :confirm-text="t('sendUpdate')"
-    :cancel-text="t('cancel')"
+    :actions="{
+      cancel: { label: t('cancel'), appearance: 'secondary-outlined' },
+      confirm: { label: t('sendUpdate'), appearance: 'primary' },
+    }"
     @confirm="sendUpdate"
   >
     <div class="updates-workspace__send-summary">
@@ -167,8 +169,10 @@
   <ZKConfirmDialog
     v-model="showEmailVerificationDialog"
     :title="t('verifyDialogTitle')"
-    :confirm-text="t('continueVerification')"
-    :cancel-text="t('notNow')"
+    :actions="{
+      cancel: { label: t('notNow'), appearance: 'secondary-outlined' },
+      confirm: { label: t('continueVerification'), appearance: 'primary' },
+    }"
     @confirm="startEmailVerification"
   >
     <p>{{ t("verifyDialogDescription") }}</p>

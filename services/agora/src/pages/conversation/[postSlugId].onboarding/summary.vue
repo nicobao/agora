@@ -94,9 +94,16 @@
       <ZKConfirmDialog
         v-model="showWithdrawDialog"
         :message="t('confirmWithdrawMessage')"
-        :confirm-text="t('confirmWithdrawButtonLabel')"
-        :cancel-text="t('withdrawDialogCancelLabel')"
-        variant="destructive"
+        :actions="{
+          cancel: {
+            label: t('withdrawDialogCancelLabel'),
+            appearance: 'secondary-outlined',
+          },
+          confirm: {
+            label: t('confirmWithdrawButtonLabel'),
+            appearance: 'danger',
+          },
+        }"
         @confirm="handleWithdraw"
       />
     </template>

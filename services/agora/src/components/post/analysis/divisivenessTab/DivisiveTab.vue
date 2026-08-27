@@ -118,8 +118,16 @@
     <ZKConfirmDialog
       v-model="showLoadMoreWarning"
       :title="tWarning('title')"
-      :confirm-text="tWarning('loadMoreButton')"
-      :cancel-text="tWarning('cancelButton')"
+      :actions="{
+        cancel: {
+          label: tWarning('cancelButton'),
+          appearance: 'secondary-outlined',
+        },
+        confirm: {
+          label: tWarning('loadMoreButton'),
+          appearance: 'primary',
+        },
+      }"
       @confirm="hasLoadedMore = true"
     >
       {{ warningDescriptionParts[0]

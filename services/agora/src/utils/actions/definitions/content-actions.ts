@@ -4,6 +4,8 @@
  */
 
 import { storeToRefs } from "pinia";
+import type { ConfirmDialogActions } from "src/components/ui-library/ZKConfirmDialog.types";
+import { useComponentI18n } from "src/composables/ui/useComponentI18n";
 import { useAuthenticationStore } from "src/stores/authentication";
 import { useUserStore } from "src/stores/user";
 import { useEmbedMode } from "src/utils/ui/embedMode";
@@ -24,13 +26,10 @@ interface ConfirmationDialogState {
   isVisible: boolean;
   title?: string;
   message: string;
-  confirmText?: string;
-  cancelText?: string;
-  variant: "default" | "destructive";
+  actions: ConfirmDialogActions;
   pendingAction: ContentAction | null;
   pendingActionContext: ContentActionContext | null;
 }
-import { useComponentI18n } from "src/composables/ui/useComponentI18n";
 
 import {
   type ActionsTranslations,
@@ -62,9 +61,10 @@ export function useContentActions() {
   const confirmationState = ref<ConfirmationDialogState>({
     isVisible: false,
     message: "",
-    confirmText: "Confirm",
-    cancelText: "Cancel",
-    variant: "default",
+    actions: {
+      cancel: { label: "Cancel", appearance: "secondary-outlined" },
+      confirm: { label: "Confirm", appearance: "primary" },
+    },
     pendingAction: null,
     pendingActionContext: null,
   });
@@ -274,9 +274,16 @@ export function useContentActions() {
     confirmationState.value = {
       isVisible: true,
       message: confirmMessage,
-      confirmText: confirmText,
-      cancelText: t("cancel"),
-      variant: action.variant === "destructive" ? "destructive" : "default",
+      actions: {
+        cancel: {
+          label: t("cancel"),
+          appearance: "secondary-outlined",
+        },
+        confirm: {
+          label: confirmText,
+          appearance: action.variant === "destructive" ? "danger" : "primary",
+        },
+      },
       pendingAction: action,
       pendingActionContext: dialogState.value.context,
     };
@@ -342,9 +349,10 @@ export function useContentActions() {
     confirmationState.value = {
       isVisible: false,
       message: "",
-      confirmText: "Confirm",
-      cancelText: "Cancel",
-      variant: "default",
+      actions: {
+        cancel: { label: "Cancel", appearance: "secondary-outlined" },
+        confirm: { label: "Confirm", appearance: "primary" },
+      },
       pendingAction: null,
       pendingActionContext: null,
     };

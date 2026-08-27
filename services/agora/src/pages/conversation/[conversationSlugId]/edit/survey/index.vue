@@ -69,9 +69,13 @@
     <ZKConfirmDialog
       v-model="showDeleteDialog"
       :message="t('confirmDeleteMessage')"
-      :confirm-text="t('deleteButton')"
-      :cancel-text="t('cancelLabel')"
-      variant="destructive"
+      :actions="{
+        cancel: {
+          label: t('cancelLabel'),
+          appearance: 'secondary-outlined',
+        },
+        confirm: { label: t('deleteButton'), appearance: 'danger' },
+      }"
       @confirm="deleteSurvey"
     />
   </NewConversationLayout>

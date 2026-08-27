@@ -162,8 +162,6 @@ vi.mock("src/components/ui-library/ZKConfirmDialog.vue", () => ({
     props: {
       modelValue: { type: Boolean, required: true },
       title: { type: String, required: true },
-      confirmText: { type: String, required: true },
-      cancelText: { type: String, required: true },
     },
     emits: ["confirm", "update:modelValue"],
     setup(props, { emit, slots }) {
@@ -171,8 +169,6 @@ vi.mock("src/components/ui-library/ZKConfirmDialog.vue", () => ({
         if (!props.modelValue) return null;
         return h("div", { "data-confirm-dialog": "" }, [
           h("span", props.title),
-          h("span", props.confirmText),
-          h("span", props.cancelText),
           slots.default?.(),
           h(
             "button",

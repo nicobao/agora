@@ -176,6 +176,9 @@ const props = withDefaults(
   }>(),
   { allowProjectSelection: true, detectedLanguageCode: undefined }
 );
+const emit = defineEmits<{
+  automaticProjectSelection: [];
+}>();
 
 const selectedProjectSlug = defineModel<string | undefined>(
   "selectedProjectSlug",
@@ -246,6 +249,12 @@ function setProjectSelectValue(value: string | string[] | null): void {
   selectedProjectSlug.value = nextProjectSlug;
   inheritProjectLanguages.value = nextProjectSlug !== undefined;
   showProjectDialog.value = false;
+}
+
+function selectProjectAutomatically(projectSlug: string | undefined): void {
+  emit("automaticProjectSelection");
+  selectedProjectSlug.value = projectSlug;
+  inheritProjectLanguages.value = projectSlug !== undefined;
 }
 
 const forwardIcon = computed(() =>
@@ -383,15 +392,13 @@ watch(
     );
     if (selectedProjectSlug.value !== undefined && !selectedProjectStillExists) {
       const nextProjectSlug = projects[0]?.slug;
-      selectedProjectSlug.value = nextProjectSlug;
-      inheritProjectLanguages.value = nextProjectSlug !== undefined;
+      selectProjectAutomatically(nextProjectSlug);
       return;
     }
 
     if (!hasInitializedProjectSelection.value) {
       const nextProjectSlug = projects[0]?.slug;
-      selectedProjectSlug.value = nextProjectSlug;
-      inheritProjectLanguages.value = nextProjectSlug !== undefined;
+      selectProjectAutomatically(nextProjectSlug);
       hasInitializedProjectSelection.value = true;
     }
   },
