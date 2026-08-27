@@ -14,6 +14,8 @@ vi.mock("src/components/ui-library/ZKConfirmDialog.vue", () => ({
       confirmText: { type: String, required: true },
       cancelText: { type: String, required: true },
       alternateText: { type: String, required: true },
+      cancelOutlined: { type: Boolean, required: true },
+      confirmOutlined: { type: Boolean, required: true },
       persistent: { type: Boolean, required: true },
       variant: { type: String, required: true },
     },
@@ -26,6 +28,8 @@ vi.mock("src/components/ui-library/ZKConfirmDialog.vue", () => ({
               {
                 "data-testid": "dialog",
                 "data-message": props.message,
+                "data-cancel-outlined": String(props.cancelOutlined),
+                "data-confirm-outlined": String(props.confirmOutlined),
                 "data-persistent": String(props.persistent),
                 "data-variant": props.variant,
               },
@@ -77,6 +81,8 @@ describe("ConversationUpdatesPartialEmailReachDialog", () => {
     const dialog = container.querySelector('[data-testid="dialog"]');
 
     expect(dialog?.getAttribute("data-message")).toBe(expectedMessage);
+    expect(dialog?.getAttribute("data-cancel-outlined")).toBe("true");
+    expect(dialog?.getAttribute("data-confirm-outlined")).toBe("true");
     expect(dialog?.getAttribute("data-persistent")).toBe("true");
     expect(dialog?.getAttribute("data-variant")).toBe("warning");
   });

@@ -37,8 +37,12 @@
           <PrimeButton
             :label="confirmText"
             :severity="confirmSeverity"
+            :outlined="confirmOutlined"
             class="confirm-button"
-            :class="{ 'confirm-button--warning': variant === 'warning' }"
+            :class="{
+              'confirm-button--warning-filled':
+                variant === 'warning' && !confirmOutlined,
+            }"
             @click="handleConfirm"
           />
         </div>
@@ -66,6 +70,7 @@ const props = withDefaults(defineProps<Props>(), {
   cancelText: "Cancel",
   cancelSeverity: "secondary",
   cancelOutlined: true,
+  confirmOutlined: false,
   alternateText: undefined,
   alternateSeverity: "primary",
   persistent: false,
@@ -81,6 +86,7 @@ interface Props {
   cancelText?: string;
   cancelSeverity?: "primary" | "secondary";
   cancelOutlined?: boolean;
+  confirmOutlined?: boolean;
   alternateText?: string;
   alternateSeverity?: "primary" | "secondary";
   persistent?: boolean;
@@ -145,7 +151,7 @@ watch(showDialog, (newValue) => {
 .confirm-dialog {
   display: flex;
   flex-direction: column;
-  gap: 2rem;
+  gap: 1.5rem;
   color: $primary;
 }
 
@@ -155,6 +161,7 @@ watch(showDialog, (newValue) => {
     font-size: 1.1rem;
     font-weight: var(--font-weight-semibold);
     color: $color-text-strong;
+    line-height: 1.35;
     text-align: center;
   }
 
@@ -179,7 +186,7 @@ watch(showDialog, (newValue) => {
     flex: 1;
   }
 
-  .confirm-button--warning.p-button.p-button-warn {
+  .confirm-button--warning-filled.p-button.p-button-warn {
     color: white;
     background-color: $warning;
     border-color: $warning;

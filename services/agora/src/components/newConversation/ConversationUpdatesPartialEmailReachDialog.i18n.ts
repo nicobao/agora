@@ -16,15 +16,15 @@ export const conversationUpdatesPartialEmailReachDialogTranslations: Record<
 > = {
   en: {
     accountPartialReach:
-      "Accounts do not require email. Mandatory onboarding only shows the opt-in to participants who voluntarily added and verified an email in Settings.",
-    enforceEmailVerificationOnly: "Enforce email verification only",
+      "An email address is not required to create an account. Only participants who add and verify one in Settings can choose to receive your email updates.",
+    enforceEmailVerificationOnly: "Require a verified email address",
     guestPartialReach:
-      "Guest participation does not require email. Mandatory onboarding only shows the opt-in to participants who voluntarily added and verified an email in Settings.",
-    keepUpdatesOn: "Keep updates on",
-    partialReachTitle: "Most participants may not receive updates",
+      "An email address is not required to participate as a guest. Only participants who add and verify one in Settings can choose to receive your email updates.",
+    keepUpdatesOn: "Keep email updates on",
+    partialReachTitle: "Your email updates may not reach everyone",
     strongVerificationPartialReach:
-      "Strong verification does not require email. Mandatory onboarding only shows the opt-in to participants who voluntarily added and verified an email in Settings.",
-    turnUpdatesOff: "Turn updates off",
+      "Strong verification does not require an email address. Only participants who add and verify one in Settings can choose to receive your email updates.",
+    turnUpdatesOff: "Turn email updates off",
   },
   ar: {
     accountPartialReach:
@@ -66,17 +66,16 @@ export const conversationUpdatesPartialEmailReachDialogTranslations: Record<
   },
   fr: {
     accountPartialReach:
-      "Les comptes ne nécessitent pas d'adresse e-mail. L'intégration obligatoire ne propose l'inscription qu'aux participants ayant volontairement ajouté et vérifié une adresse dans les paramètres.",
-    enforceEmailVerificationOnly:
-      "Imposer uniquement la vérification par e-mail",
+      "Une adresse e-mail n'est pas requise pour créer un compte. Seuls les participants qui en ajoutent et vérifient une dans leurs paramètres peuvent choisir de recevoir vos nouvelles par e-mail.",
+    enforceEmailVerificationOnly: "Exiger une adresse e-mail vérifiée",
     guestPartialReach:
-      "La participation en tant qu'invité ne nécessite pas d'adresse e-mail. L'intégration obligatoire ne propose l'inscription qu'aux participants ayant volontairement ajouté et vérifié une adresse dans les paramètres.",
-    keepUpdatesOn: "Garder les mises à jour activées",
+      "Une adresse e-mail n'est pas requise pour participer en tant qu'invité. Seuls les participants qui en ajoutent et vérifient une dans leurs paramètres peuvent choisir de recevoir vos nouvelles par e-mail.",
+    keepUpdatesOn: "Garder les nouvelles par e-mail activées",
     partialReachTitle:
-      "La plupart des participants risquent de ne pas recevoir les mises à jour",
+      "Vos nouvelles par e-mail pourraient ne pas parvenir à tout le monde",
     strongVerificationPartialReach:
-      "La vérification renforcée ne nécessite pas d'adresse e-mail. L'intégration obligatoire ne propose l'inscription qu'aux participants ayant volontairement ajouté et vérifié une adresse dans les paramètres.",
-    turnUpdatesOff: "Désactiver les mises à jour",
+      "La vérification renforcée ne nécessite pas d'adresse e-mail. Seuls les participants qui en ajoutent et vérifient une dans leurs paramètres peuvent choisir de recevoir vos nouvelles par e-mail.",
+    turnUpdatesOff: "Désactiver les nouvelles par e-mail",
   },
   he: {
     accountPartialReach:
