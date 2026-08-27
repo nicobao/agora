@@ -57,6 +57,9 @@
         "
         :nested="true"
         :owner="getConversationOwner(conversation)"
+        :project-default-enabled="
+          group.kind === 'project' ? group.state === 'enabled' : undefined
+        "
         :saving="controlsDisabled"
         @set-enabled="
           emit('setConversationEnabled', {

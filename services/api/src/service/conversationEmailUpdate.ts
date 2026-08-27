@@ -2472,6 +2472,13 @@ function buildPreferenceConversationAvailabilityCondition({
     );
 }
 
+function buildPreferenceConversationConfiguredCondition() {
+    return sql<boolean>`coalesce(
+        ${conversationTable.conversationEmailUpdateEnabledOverride},
+        ${projectTable.conversationEmailUpdateDefaultEnabled}
+    ) = true`;
+}
+
 export async function queryPreferenceGroupPage({
     db,
     userId,
@@ -2517,6 +2524,7 @@ export async function queryPreferenceGroupPage({
                         userId,
                     ),
                     eq(conversationTable.projectId, projectTable.id),
+                    buildPreferenceConversationConfiguredCondition(),
                 ),
             ),
     );
@@ -2607,6 +2615,7 @@ export async function queryPreferenceGroupPage({
             .where(
                 and(
                     eq(conversationTable.projectId, projectTable.id),
+                    buildPreferenceConversationConfiguredCondition(),
                     or(
                         isNotNull(
                             conversationEmailUpdateUserConversationPreferenceTable.enabled,
@@ -2672,6 +2681,7 @@ export async function queryPreferenceGroupPage({
         });
     const noProjectConditions = and(
         isNotNull(projectTable.autoProvisionedForOrganizationId),
+        buildPreferenceConversationConfiguredCondition(),
         or(
             isNotNull(
                 conversationEmailUpdateUserConversationPreferenceTable.enabled,
@@ -3069,6 +3079,7 @@ function buildPreferenceConversationScopeConditions({
             scopeKind === "project"
                 ? isNull(projectTable.autoProvisionedForOrganizationId)
                 : isNotNull(projectTable.autoProvisionedForOrganizationId),
+            buildPreferenceConversationConfiguredCondition(),
             or(
                 explicitPreference,
                 and(

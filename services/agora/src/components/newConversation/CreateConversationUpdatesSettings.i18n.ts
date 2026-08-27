@@ -122,7 +122,7 @@ export const createConversationUpdatesSettingsTranslations: Record<
     noProjectGroup: "le groupe Sans projet",
     off: "Désactivées",
     on: "Activées",
-    override: "dérogation",
+    override: "hérité",
     overridesDescription: "Remplace le réglage {defaultValue} de {scopeLabel}.",
     projectDefault: "réglage par défaut du projet",
     projectFallback: "le projet",

@@ -22,7 +22,9 @@
         :model-value="
           conversation.preferenceKind === 'explicit'
             ? conversation.state === 'enabled'
-            : conversation.resolvedEnabled
+            : conversation.preferenceKind === 'project_inherited'
+              ? projectDefaultEnabled === true
+              : conversation.resolvedEnabled
         "
         :disable="
           conversation.availability === 'temporarily_unavailable' || saving
@@ -56,6 +58,7 @@ defineProps<{
   destination: string;
   nested: boolean;
   owner: ConversationEmailUpdatePreferenceAvatar | undefined;
+  projectDefaultEnabled: boolean | undefined;
   saving: boolean;
 }>();
 
