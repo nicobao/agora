@@ -408,13 +408,7 @@ export function useConversationUpdatePreferences({
       }
       confirmMutation({ result: response.result, revision });
       removeConversationEmailUpdateSummaryQueries(response.result);
-      if (response.result.globalResumed) {
-        showNotifyMessage(
-          tEmailUpdateResume("preferenceSavedAndGlobalResumed")
-        );
-      } else {
-        showNotifyMessage(t("savePreferenceSuccess"));
-      }
+      showPreferenceSaved(response.result.globalResumed);
     } catch (error) {
       console.error(
         "Failed to update an Email Updates project preference",
@@ -467,13 +461,7 @@ export function useConversationUpdatePreferences({
       }
       confirmMutation({ result: savedResult, revision });
       removeConversationEmailUpdateSummaryQueries(savedResult);
-      if (savedResult.globalResumed) {
-        showNotifyMessage(
-          tEmailUpdateResume("preferenceSavedAndGlobalResumed")
-        );
-      } else {
-        showNotifyMessage(t("savePreferenceSuccess"));
-      }
+      showPreferenceSaved(savedResult.globalResumed);
     } catch (error) {
       console.error(
         "Failed to update an Email Updates conversation preference",
@@ -502,6 +490,14 @@ export function useConversationUpdatePreferences({
       preferences: [preference],
     });
     return revision;
+  }
+
+  function showPreferenceSaved(globalResumed: boolean): void {
+    showNotifyMessage(
+      globalResumed
+        ? tEmailUpdateResume("preferenceSavedAndGlobalResumed")
+        : t("savePreferenceSuccess")
+    );
   }
 
   function finishMutation(

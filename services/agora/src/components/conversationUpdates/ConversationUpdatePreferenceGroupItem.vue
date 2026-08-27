@@ -55,11 +55,9 @@
         :destination="
           getConversationDestination(conversation.conversationSlugId)
         "
+        :display-enabled="getConversationDisplayEnabled(conversation)"
         :nested="true"
         :owner="getConversationOwner(conversation)"
-        :project-default-enabled="
-          group.kind === 'project' ? group.state === 'enabled' : undefined
-        "
         :saving="controlsDisabled"
         @set-enabled="
           emit('setConversationEnabled', {
@@ -139,6 +137,21 @@ function getConversationDestination(conversationSlugId: string): string {
   return props.group.kind === "project"
     ? `/project/${props.group.projectSlug}/conversation/${conversationSlugId}`
     : `/conversation/${conversationSlugId}`;
+}
+
+function getConversationDisplayEnabled(
+  conversation: ConversationEmailUpdatePreference
+): boolean {
+  if (conversation.preferenceKind === "explicit") {
+    return conversation.state === "enabled";
+  }
+  if (
+    conversation.preferenceKind === "project_inherited" &&
+    props.group.kind === "project"
+  ) {
+    return props.group.state === "enabled";
+  }
+  return conversation.resolvedEnabled;
 }
 
 function getConversationOwner(

@@ -92,6 +92,17 @@ const projectGroup = {
   ],
 } satisfies ConversationEmailUpdatePreferenceGroup;
 
+const inheritedProjectGroup = {
+  ...projectGroup,
+  conversations: [
+    {
+      ...projectGroup.conversations[0],
+      preferenceKind: "project_inherited",
+      state: "undisclosed",
+    },
+  ],
+} satisfies ConversationEmailUpdatePreferenceGroup;
+
 const noProjectGroup = {
   kind: "no_project",
   availability: "available",
@@ -252,16 +263,6 @@ describe("ConversationUpdatePreferenceSettings", () => {
   });
 
   it("keeps an inherited switch tied to its project while globally paused", async () => {
-    const inheritedProjectGroup = {
-      ...projectGroup,
-      conversations: [
-        {
-          ...projectGroup.conversations[0],
-          preferenceKind: "project_inherited",
-          state: "undisclosed",
-        },
-      ],
-    } satisfies ConversationEmailUpdatePreferenceGroup;
     api.getPreferences.mockResolvedValue({
       success: true,
       globalPaused: false,
@@ -288,16 +289,6 @@ describe("ConversationUpdatePreferenceSettings", () => {
   });
 
   it("saves an explicit override for an inherited conversation", async () => {
-    const inheritedProjectGroup = {
-      ...projectGroup,
-      conversations: [
-        {
-          ...projectGroup.conversations[0],
-          preferenceKind: "project_inherited",
-          state: "undisclosed",
-        },
-      ],
-    } satisfies ConversationEmailUpdatePreferenceGroup;
     api.getPreferences.mockResolvedValue({
       success: true,
       globalPaused: false,

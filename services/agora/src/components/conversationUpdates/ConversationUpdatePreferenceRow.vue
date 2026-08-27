@@ -19,13 +19,7 @@
     </q-item-section>
     <q-item-section side>
       <ZKSwitch
-        :model-value="
-          conversation.preferenceKind === 'explicit'
-            ? conversation.state === 'enabled'
-            : conversation.preferenceKind === 'project_inherited'
-              ? projectDefaultEnabled === true
-              : conversation.resolvedEnabled
-        "
+        :model-value="displayEnabled"
         :disable="
           conversation.availability === 'temporarily_unavailable' || saving
         "
@@ -56,9 +50,9 @@ import type { ConversationEmailUpdatePreference } from "./conversationUpdatePref
 defineProps<{
   conversation: ConversationEmailUpdatePreference;
   destination: string;
+  displayEnabled: boolean;
   nested: boolean;
   owner: ConversationEmailUpdatePreferenceAvatar | undefined;
-  projectDefaultEnabled: boolean | undefined;
   saving: boolean;
 }>();
 
