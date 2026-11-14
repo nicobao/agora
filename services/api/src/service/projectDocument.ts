@@ -7,6 +7,7 @@ import { config, log } from "@/app.js";
 import {
     projectDocumentFileTable,
     projectDocumentLocalizationTable,
+    projectDocumentRepresentationTable,
     projectDocumentTable,
     projectTable,
     userTable,
@@ -29,6 +30,12 @@ import type {
     UploadProjectDocumentResponse,
 } from "@/shared/types/dto.js";
 import { hasProjectCapability } from "./projectAccess.js";
+import type { ProjectDocumentEncoding } from "./projectDocumentCompression.js";
+import {
+    cleanupProjectDocumentRepresentations,
+    publishProjectDocumentRepresentations,
+    STALE_PENDING_UPLOAD_AGE_MS,
+} from "./projectDocumentStorage.js";
 import {
     buildProjectDocumentContentDisposition,
     normalizeProjectDocumentLocalizations,
@@ -42,8 +49,6 @@ interface StorageConfig {
     bucketName: string;
     region: string;
 }
-
-const STALE_PENDING_UPLOAD_AGE_MS = 60 * 60 * 1000;
 
 function getStorageConfig(): StorageConfig {
     const bucketName = config.PROJECT_DOCUMENTS_AWS_S3_BUCKET_NAME;
@@ -296,21 +301,31 @@ export async function uploadProjectDocument({
                 downloadFileName: localization.downloadFileName,
             })),
         );
-        await tx.insert(projectDocumentFileTable).values(
-            objectUploads.map((upload) => ({
-                projectDocumentId: insertedDocument.id,
-                audience: upload.audience,
-                objectKey: upload.objectKey,
-                originalFileName: upload.file.originalFileName,
-                contentType: upload.file.contentType,
-                byteSize: upload.file.buffer.length,
-                htmlScriptsEnabled: upload.file.contentType === "text/html",
-            })),
-        );
+        const reservedUploads: ((typeof objectUploads)[number] & {
+            fileId: number;
+        })[] = [];
+        for (const upload of objectUploads) {
+            const rows = await tx
+                .insert(projectDocumentFileTable)
+                .values({
+                    projectDocumentId: insertedDocument.id,
+                    audience: upload.audience,
+                    objectKey: upload.objectKey,
+                    originalFileName: upload.file.originalFileName,
+                    contentType: upload.file.contentType,
+                    byteSize: upload.file.buffer.length,
+                    htmlScriptsEnabled: upload.file.contentType === "text/html",
+                })
+                .returning({ id: projectDocumentFileTable.id });
+            reservedUploads.push(
+                ...rows.map(({ id }) => ({ ...upload, fileId: id })),
+            );
+        }
         return {
             ...insertedDocument,
             projectId,
-            objectUploads,
+            objectUploads: reservedUploads,
+            expectedFileCount: objectUploads.length,
             uploaderUsername: uploader.username,
         };
     });
@@ -324,6 +339,16 @@ export async function uploadProjectDocument({
                 contentType: upload.file.contentType,
                 checksumSha256: upload.file.checksumSha256,
                 region,
+            });
+            await publishProjectDocumentRepresentations({
+                db,
+                file: {
+                    id: upload.fileId,
+                    objectKey: upload.objectKey,
+                    contentType: upload.file.contentType,
+                },
+                storage: { bucketName, region },
+                buffer: upload.file.buffer,
             });
         }
         const wasPublished = await db.transaction(async (tx) => {
@@ -371,9 +396,7 @@ export async function uploadProjectDocument({
                     ),
                 )
                 .returning({ id: projectDocumentFileTable.id });
-            if (
-                publishedFiles.length !== persistedDocument.objectUploads.length
-            ) {
+            if (publishedFiles.length !== persistedDocument.expectedFileCount) {
                 throw httpErrors.conflict(
                     "Project document files changed during publication",
                 );
@@ -708,6 +731,12 @@ export async function cleanupProjectDocumentStorage({
             }),
         ),
     );
+    await cleanupProjectDocumentRepresentations({
+        db,
+        storage,
+        projectSlug,
+        documentId,
+    });
 }
 
 export async function fetchProjectPageDocuments({
@@ -875,10 +904,12 @@ export async function accessProjectDocument({
     db,
     request,
     authorization,
+    acceptedEncodings = ["identity"],
 }: {
     db: PostgresJsDatabase;
     request: AccessProjectDocumentRequest;
     authorization: ProjectDocumentAccessAuthorization;
+    acceptedEncodings?: readonly ProjectDocumentEncoding[];
 }): Promise<AccessProjectDocumentResponse> {
     const access = await db.transaction(async (tx) => {
         const documentRows = await tx
@@ -924,6 +955,7 @@ export async function accessProjectDocument({
         }
         const fileRows = await tx
             .select({
+                id: projectDocumentFileTable.id,
                 audience: projectDocumentFileTable.audience,
                 objectKey: projectDocumentFileTable.objectKey,
                 contentType: projectDocumentFileTable.contentType,
@@ -941,6 +973,45 @@ export async function accessProjectDocument({
         const selectedFile = fileRows.at(0);
         if (selectedFile === undefined) {
             throw httpErrors.notFound("Project document file not found");
+        }
+        const representations = acceptedEncodings.some(
+            (encoding) => encoding !== "identity",
+        )
+            ? await tx
+                  .select({
+                      encoding: projectDocumentRepresentationTable.encoding,
+                      objectKey: projectDocumentRepresentationTable.objectKey,
+                  })
+                  .from(projectDocumentRepresentationTable)
+                  .where(
+                      and(
+                          eq(
+                              projectDocumentRepresentationTable.fileId,
+                              selectedFile.id,
+                          ),
+                          eq(
+                              projectDocumentRepresentationTable.status,
+                              "available",
+                          ),
+                          isNull(projectDocumentRepresentationTable.deletedAt),
+                          isNull(
+                              projectDocumentRepresentationTable.objectDeletedAt,
+                          ),
+                      ),
+                  )
+            : [];
+        const selectedObjectKey = acceptedEncodings
+            .map((encoding) => {
+                if (encoding === "identity") return selectedFile.objectKey;
+                return representations.find(
+                    (candidate) => candidate.encoding === encoding,
+                )?.objectKey;
+            })
+            .find((objectKey) => objectKey !== undefined);
+        if (selectedObjectKey === undefined) {
+            throw httpErrors.notAcceptable(
+                "No acceptable document encoding is available",
+            );
         }
         const contentType = selectedFile.contentType;
         if (
@@ -990,6 +1061,7 @@ export async function accessProjectDocument({
         }
         return {
             selectedFile,
+            selectedObjectKey,
             downloadFileName: getProjectDocumentDownloadFileName({
                 fileName: downloadFileName,
                 audience: selectedFile.audience,
@@ -999,7 +1071,7 @@ export async function accessProjectDocument({
     });
     const { bucketName, region } = getStorageConfig();
     const signedUrl = await generatePresignedUrl({
-        s3Key: access.selectedFile.objectKey,
+        s3Key: access.selectedObjectKey,
         bucketName,
         region,
         expiresIn: config.PROJECT_DOCUMENTS_S3_PRESIGNED_URL_EXPIRY_SECONDS,

@@ -245,6 +245,7 @@ CREATE TABLE "project_document_file" (
 	"content_type" "project_document_content_type" NOT NULL,
 	"html_scripts_enabled" boolean DEFAULT false NOT NULL,
 	"byte_size" integer NOT NULL,
+	"compression_skipped_at" timestamp (0),
 	"created_at" timestamp (0) DEFAULT now() NOT NULL,
 	"deleted_at" timestamp (0),
 	"object_deleted_at" timestamp (0),

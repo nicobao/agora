@@ -22,7 +22,7 @@ import {
     foreignKey,
     primaryKey,
 } from "drizzle-orm/pg-core";
-import { isNotNull, isNull, type SQL } from "drizzle-orm";
+import { gt, isNotNull, isNull, type SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm/sql";
 import {
     ZodSupportedDisplayLanguageCodes,
@@ -643,6 +643,14 @@ export const projectDocumentAudienceEnum = pgEnum("project_document_audience", [
 export const projectDocumentFileStatusEnum = pgEnum(
     "project_document_file_status",
     ["pending", "available"],
+);
+export const projectDocumentEncodingEnum = pgEnum("project_document_encoding", [
+    "gzip",
+    "br",
+]);
+export const projectDocumentRepresentationStatusEnum = pgEnum(
+    "project_document_representation_status",
+    ["pending", "available", "failed"],
 );
 export const projectDocumentContentTypeEnum = pgEnum(
     "project_document_content_type",
@@ -1572,6 +1580,11 @@ export const projectDocumentFileTable = pgTable(
             .notNull()
             .default(false),
         byteSize: integer("byte_size").notNull(),
+        // Avoid retrying files for which neither encoding reduces the size.
+        compressionSkippedAt: timestamp("compression_skipped_at", {
+            mode: "date",
+            precision: 0,
+        }),
         createdAt: timestamp("created_at", {
             mode: "date",
             precision: 0,
@@ -1605,6 +1618,54 @@ export const projectDocumentFileTable = pgTable(
         check(
             "project_document_file_html_scripts_check",
             sql`NOT ${table.htmlScriptsEnabled} OR ${table.contentType} = 'text/html'`,
+        ),
+    ],
+);
+
+/** @service api */
+export const projectDocumentRepresentationTable = pgTable(
+    "project_document_representation",
+    {
+        id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+        fileId: integer("file_id")
+            .references(() => projectDocumentFileTable.id)
+            .notNull(),
+        encoding: projectDocumentEncodingEnum("encoding").notNull(),
+        status: projectDocumentRepresentationStatusEnum("status")
+            .default("pending")
+            .notNull(),
+        objectKey: text("object_key").notNull().unique(),
+        byteSize: integer("byte_size").notNull(),
+        checksumSha256: text("checksum_sha256").notNull(),
+        createdAt: timestamp("created_at", { mode: "date", precision: 0 })
+            .defaultNow()
+            .notNull(),
+        deletedAt: timestamp("deleted_at", { mode: "date", precision: 0 }),
+        objectDeletedAt: timestamp("object_deleted_at", {
+            mode: "date",
+            precision: 0,
+        }),
+    },
+    (table) => [
+        uniqueIndex(
+            "project_document_representation_file_encoding_active_unique",
+        )
+            .on(table.fileId, table.encoding)
+            .where(isNull(table.deletedAt)),
+        index("project_document_representation_cleanup_idx")
+            .on(table.createdAt)
+            .where(isNull(table.objectDeletedAt)),
+        check(
+            "project_document_representation_byte_size_check",
+            gt(table.byteSize, 0).inlineParams(),
+        ),
+        check(
+            "project_document_representation_failed_check",
+            sql`${table.status} <> 'failed' OR ${table.deletedAt} IS NOT NULL`,
+        ),
+        check(
+            "project_document_representation_deleted_object_check",
+            sql`${table.objectDeletedAt} IS NULL OR ${table.deletedAt} IS NOT NULL`,
         ),
     ],
 );

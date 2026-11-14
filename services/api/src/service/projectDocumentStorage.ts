@@ -1,0 +1,422 @@
+import { httpErrors } from "@fastify/sensible";
+import {
+    and,
+    asc,
+    eq,
+    gte,
+    inArray,
+    isNull,
+    isNotNull,
+    lt,
+    ne,
+    notExists,
+    or,
+} from "drizzle-orm";
+import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import { randomUUID } from "node:crypto";
+import pLimit from "p-limit";
+import {
+    projectDocumentFileTable,
+    projectDocumentRepresentationTable,
+    projectDocumentTable,
+    projectTable,
+} from "@/shared-backend/schema.js";
+import {
+    compressProjectDocument,
+    type CompressedProjectDocument,
+} from "./projectDocumentCompression.js";
+import { deleteFromS3, downloadFromS3, uploadToS3 } from "./s3.js";
+
+export interface ProjectDocumentStorage {
+    bucketName: string;
+    region: string;
+}
+
+export const STALE_PENDING_UPLOAD_AGE_MS = 60 * 60 * 1000;
+const uploadTimeoutMs = 120_000;
+const storageLimit = pLimit(5);
+
+async function lockActiveFile({
+    db,
+    fileId,
+}: {
+    db: PostgresJsDatabase;
+    fileId: number;
+}) {
+    const rows = await db
+        .select({
+            compressionSkippedAt: projectDocumentFileTable.compressionSkippedAt,
+        })
+        .from(projectDocumentFileTable)
+        .innerJoin(
+            projectDocumentTable,
+            eq(
+                projectDocumentTable.id,
+                projectDocumentFileTable.projectDocumentId,
+            ),
+        )
+        .where(
+            and(
+                eq(projectDocumentFileTable.id, fileId),
+                isNull(projectDocumentFileTable.deletedAt),
+                isNull(projectDocumentFileTable.objectDeletedAt),
+                isNull(projectDocumentTable.deletedAt),
+            ),
+        )
+        .for("update", { of: projectDocumentFileTable });
+    const file = rows.at(0);
+    if (file === undefined)
+        throw httpErrors.notFound("Project document file not found");
+    return file;
+}
+
+/**
+ * Identity remains the rollback/download source. Derivatives are published
+ * together, and existing published files remain readable during backfills.
+ */
+export async function publishProjectDocumentRepresentations({
+    db,
+    file,
+    storage,
+    buffer,
+}: {
+    db: PostgresJsDatabase;
+    file: Pick<
+        typeof projectDocumentFileTable.$inferSelect,
+        "id" | "objectKey" | "contentType"
+    >;
+    storage: ProjectDocumentStorage;
+    buffer: Buffer;
+}): Promise<number> {
+    const compressed = await compressProjectDocument({
+        buffer,
+        contentType: file.contentType,
+    });
+    // One deadline covers reservation waits and every PUT, not just each upload.
+    // Expired publishers must stop well before stale-pending cleanup can run.
+    const deadlineMs = Date.now() + uploadTimeoutMs;
+    const abortSignal = AbortSignal.timeout(uploadTimeoutMs);
+    function checkDeadline(): void {
+        abortSignal.throwIfAborted();
+        // Timers may not have fired yet when a suspended process resumes.
+        if (Date.now() >= deadlineMs)
+            throw new DOMException(
+                "Document publication deadline exceeded",
+                "TimeoutError",
+            );
+    }
+    const reserved = await db.transaction(async (tx) => {
+        const active = await lockActiveFile({ db: tx, fileId: file.id });
+        checkDeadline();
+        if (active.compressionSkippedAt !== null) return [];
+        const existing = await tx
+            .select({ id: projectDocumentRepresentationTable.id })
+            .from(projectDocumentRepresentationTable)
+            .where(
+                and(
+                    eq(projectDocumentRepresentationTable.fileId, file.id),
+                    isNull(projectDocumentRepresentationTable.deletedAt),
+                ),
+            )
+            .limit(1);
+        // A concurrent publisher owns the pending set, or this file is prepared.
+        if (existing.length > 0) return [];
+        if (compressed.length === 0) {
+            await tx
+                .update(projectDocumentFileTable)
+                .set({ compressionSkippedAt: new Date() })
+                .where(eq(projectDocumentFileTable.id, file.id));
+            return [];
+        }
+        const uploads: (CompressedProjectDocument &
+            Pick<
+                typeof projectDocumentRepresentationTable.$inferSelect,
+                "id" | "objectKey"
+            >)[] = [];
+        for (const representation of compressed) {
+            const rows = await tx
+                .insert(projectDocumentRepresentationTable)
+                .values({
+                    fileId: file.id,
+                    encoding: representation.encoding,
+                    objectKey: `${file.objectKey}/representations/${randomUUID()}/${representation.encoding}`,
+                    byteSize: representation.buffer.length,
+                    checksumSha256: representation.checksumSha256,
+                })
+                .returning({
+                    id: projectDocumentRepresentationTable.id,
+                    objectKey: projectDocumentRepresentationTable.objectKey,
+                });
+            uploads.push(...rows.map((row) => ({ ...representation, ...row })));
+        }
+        return uploads;
+    });
+    if (reserved.length === 0) return 0;
+    const ids = reserved.map(({ id }) => id);
+    try {
+        for (const representation of reserved) {
+            checkDeadline();
+            await uploadToS3({
+                s3Key: representation.objectKey,
+                bucketName: storage.bucketName,
+                region: storage.region,
+                contentType: file.contentType,
+                contentEncoding: representation.encoding,
+                buffer: representation.buffer,
+                checksumSha256: representation.checksumSha256,
+                abortSignal,
+            });
+        }
+        await db.transaction(async (tx) => {
+            await lockActiveFile({ db: tx, fileId: file.id });
+            checkDeadline();
+            const published = await tx
+                .update(projectDocumentRepresentationTable)
+                .set({ status: "available" })
+                .where(
+                    and(
+                        inArray(projectDocumentRepresentationTable.id, ids),
+                        eq(
+                            projectDocumentRepresentationTable.status,
+                            "pending",
+                        ),
+                        isNull(projectDocumentRepresentationTable.deletedAt),
+                        isNull(
+                            projectDocumentRepresentationTable.objectDeletedAt,
+                        ),
+                    ),
+                )
+                .returning({ id: projectDocumentRepresentationTable.id });
+            if (published.length !== reserved.length)
+                throw httpErrors.conflict(
+                    "Document representation publication was cancelled",
+                );
+        });
+        return reserved.length;
+    } catch (error) {
+        await db
+            .update(projectDocumentRepresentationTable)
+            .set({ status: "failed", deletedAt: new Date() })
+            .where(
+                and(
+                    inArray(projectDocumentRepresentationTable.id, ids),
+                    isNull(projectDocumentRepresentationTable.objectDeletedAt),
+                ),
+            );
+        throw error;
+    }
+}
+
+export async function cleanupProjectDocumentRepresentations({
+    db,
+    storage,
+    projectSlug,
+    documentId,
+}: {
+    db: PostgresJsDatabase;
+    storage: ProjectDocumentStorage;
+    projectSlug: string | undefined;
+    documentId: string | undefined;
+}): Promise<void> {
+    const cutoff = new Date(Date.now() - STALE_PENDING_UPLOAD_AGE_MS);
+    // Claim/tombstone on the writer before deleting S3 objects. A replica read
+    // could miss a recent deletion or mistake a completed upload for abandoned.
+    const rows = await db.transaction(async (tx) => {
+        const candidates = await tx
+            .select({
+                id: projectDocumentRepresentationTable.id,
+                objectKey: projectDocumentRepresentationTable.objectKey,
+            })
+            .from(projectDocumentRepresentationTable)
+            .innerJoin(
+                projectDocumentFileTable,
+                eq(
+                    projectDocumentFileTable.id,
+                    projectDocumentRepresentationTable.fileId,
+                ),
+            )
+            .innerJoin(
+                projectDocumentTable,
+                eq(
+                    projectDocumentTable.id,
+                    projectDocumentFileTable.projectDocumentId,
+                ),
+            )
+            .innerJoin(
+                projectTable,
+                eq(projectTable.id, projectDocumentTable.projectId),
+            )
+            .where(
+                and(
+                    isNull(projectDocumentRepresentationTable.objectDeletedAt),
+                    or(
+                        isNotNull(projectDocumentFileTable.deletedAt),
+                        isNotNull(projectDocumentRepresentationTable.deletedAt),
+                        and(
+                            eq(
+                                projectDocumentRepresentationTable.status,
+                                "pending",
+                            ),
+                            lt(
+                                projectDocumentRepresentationTable.createdAt,
+                                cutoff,
+                            ),
+                        ),
+                    ),
+                    // Do not race an active upload, even if its parent was deleted.
+                    or(
+                        ne(
+                            projectDocumentRepresentationTable.status,
+                            "pending",
+                        ),
+                        lt(
+                            projectDocumentRepresentationTable.createdAt,
+                            cutoff,
+                        ),
+                    ),
+                    projectSlug === undefined
+                        ? undefined
+                        : eq(projectTable.slug, projectSlug),
+                    documentId === undefined
+                        ? undefined
+                        : eq(projectDocumentTable.publicId, documentId),
+                ),
+            )
+            .orderBy(asc(projectDocumentRepresentationTable.id))
+            .limit(100)
+            .for("update", {
+                of: projectDocumentRepresentationTable,
+                skipLocked: true,
+            });
+        if (candidates.length === 0) return [];
+        return await tx
+            .update(projectDocumentRepresentationTable)
+            .set({ deletedAt: new Date() })
+            .where(
+                inArray(
+                    projectDocumentRepresentationTable.id,
+                    candidates.map(({ id }) => id),
+                ),
+            )
+            .returning({
+                id: projectDocumentRepresentationTable.id,
+                objectKey: projectDocumentRepresentationTable.objectKey,
+            });
+    });
+    const results = await Promise.allSettled(
+        rows.map((row) =>
+            storageLimit(async () => {
+                await deleteFromS3({
+                    s3Key: row.objectKey,
+                    bucketName: storage.bucketName,
+                    region: storage.region,
+                });
+                const now = new Date();
+                await db
+                    .update(projectDocumentRepresentationTable)
+                    .set({ objectDeletedAt: now })
+                    .where(eq(projectDocumentRepresentationTable.id, row.id));
+            }),
+        ),
+    );
+    // Finish every deletion before returning/closing the backfill's DB client.
+    for (const result of results) {
+        if (result.status === "rejected") throw result.reason;
+    }
+}
+
+export async function backfillProjectDocumentRepresentations({
+    db,
+    storage,
+    projectSlug,
+    documentId,
+    apply,
+    limit,
+}: {
+    db: PostgresJsDatabase;
+    storage: ProjectDocumentStorage;
+    projectSlug: string;
+    documentId: string | undefined;
+    apply: boolean;
+    limit: number;
+}): Promise<{ selected: number; prepared: number }> {
+    const files = await db
+        .select({
+            id: projectDocumentFileTable.id,
+            objectKey: projectDocumentFileTable.objectKey,
+            contentType: projectDocumentFileTable.contentType,
+            byteSize: projectDocumentFileTable.byteSize,
+        })
+        .from(projectDocumentFileTable)
+        .innerJoin(
+            projectDocumentTable,
+            eq(
+                projectDocumentTable.id,
+                projectDocumentFileTable.projectDocumentId,
+            ),
+        )
+        .innerJoin(
+            projectTable,
+            eq(projectTable.id, projectDocumentTable.projectId),
+        )
+        .where(
+            and(
+                eq(projectTable.slug, projectSlug),
+                eq(projectTable.directoryVisibility, "listed"),
+                isNotNull(projectTable.currentContentId),
+                isNull(projectTable.deletedAt),
+                isNotNull(projectDocumentTable.publishedAt),
+                isNull(projectDocumentTable.deletedAt),
+                isNull(projectDocumentFileTable.deletedAt),
+                eq(projectDocumentFileTable.status, "available"),
+                isNull(projectDocumentFileTable.compressionSkippedAt),
+                ne(projectDocumentFileTable.contentType, "application/pdf"),
+                gte(projectDocumentFileTable.byteSize, 1024),
+                documentId === undefined
+                    ? undefined
+                    : eq(projectDocumentTable.publicId, documentId),
+                notExists(
+                    db
+                        .select({ id: projectDocumentRepresentationTable.id })
+                        .from(projectDocumentRepresentationTable)
+                        .where(
+                            and(
+                                eq(
+                                    projectDocumentRepresentationTable.fileId,
+                                    projectDocumentFileTable.id,
+                                ),
+                                isNull(
+                                    projectDocumentRepresentationTable.deletedAt,
+                                ),
+                            ),
+                        ),
+                ),
+            ),
+        )
+        .orderBy(asc(projectDocumentFileTable.id))
+        .limit(limit);
+    if (!apply) return { selected: files.length, prepared: 0 };
+    let prepared = 0;
+    // One file at a time bounds S3 download memory as well as compression work.
+    for (const file of files) {
+        const buffer = await downloadFromS3({
+            s3Key: file.objectKey,
+            bucketName: storage.bucketName,
+            region: storage.region,
+        });
+        if (buffer.length !== file.byteSize) {
+            throw new Error(
+                "Stored project document size does not match its metadata",
+            );
+        }
+        // Preserve the old CSP and execution policy; do not normalize it again.
+        const published = await publishProjectDocumentRepresentations({
+            db,
+            file,
+            storage,
+            buffer,
+        });
+        if (published > 0) prepared += 1;
+    }
+    return { selected: files.length, prepared };
+}

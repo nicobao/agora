@@ -55,6 +55,8 @@ export async function uploadToS3({
     fileName,
     contentType = "text/csv",
     checksumSha256,
+    contentEncoding,
+    abortSignal,
     region = config.EXPORT_CONVOS_AWS_S3_REGION,
 }: {
     s3Key: string;
@@ -63,6 +65,8 @@ export async function uploadToS3({
     fileName?: string;
     contentType?: string;
     checksumSha256?: string;
+    contentEncoding?: "gzip" | "br";
+    abortSignal?: AbortSignal;
     region?: string;
 }): Promise<void> {
     await getS3Client({ region }).send(
@@ -71,11 +75,13 @@ export async function uploadToS3({
             Key: s3Key,
             Body: buffer,
             ContentType: contentType,
+            ContentEncoding: contentEncoding,
             ChecksumSHA256: checksumSha256,
             ContentDisposition: fileName
                 ? `attachment; filename="${fileName}"`
                 : undefined,
         }),
+        { abortSignal },
     );
 }
 

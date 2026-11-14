@@ -7,6 +7,8 @@ export const logMessageTemplates: readonly LogMessageTemplate[] = [
     { parts: ["request completed"] },
     { parts: ["request errored"] },
     { parts: ["Application event"] },
+    { parts: ["Project document compression candidates selected"] },
+    { parts: ["Project document compression preparation completed"] },
     { parts: ["API server failed to start"] },
     { parts: ["[Survey] Failed to queue ranking recomputation"] },
     { parts: ["[Zupass] Event ticket verified"] },
