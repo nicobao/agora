@@ -17,7 +17,10 @@ CREATE TABLE "project_document_representation" (
 	CONSTRAINT "project_document_representation_deleted_object_check" CHECK ("project_document_representation"."object_deleted_at" IS NULL OR "project_document_representation"."deleted_at" IS NOT NULL)
 );
 --> statement-breakpoint
-ALTER TABLE "project_document_file" ADD COLUMN "compression_skipped_at" timestamp (0);--> statement-breakpoint
+ALTER TABLE "project_document_file" ADD COLUMN "compressed_at" timestamp (0);--> statement-breakpoint
 ALTER TABLE "project_document_representation" ADD CONSTRAINT "project_document_representation_file_id_project_document_file_id_fk" FOREIGN KEY ("file_id") REFERENCES "public"."project_document_file"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX "project_document_representation_file_encoding_active_unique" ON "project_document_representation" USING btree ("file_id","encoding") WHERE "project_document_representation"."deleted_at" is null;--> statement-breakpoint
-CREATE INDEX "project_document_representation_cleanup_idx" ON "project_document_representation" USING btree ("created_at") WHERE "project_document_representation"."object_deleted_at" is null;
+CREATE INDEX "project_document_representation_cleanup_idx" ON "project_document_representation" USING btree ("created_at") WHERE "project_document_representation"."object_deleted_at" is null;--> statement-breakpoint
+CREATE INDEX "project_document_file_original_retirement_idx" ON "project_document_file" USING btree ("compressed_at") WHERE "project_document_file"."compressed_at" IS NOT NULL AND "project_document_file"."deleted_at" IS NULL AND "project_document_file"."object_deleted_at" IS NULL;--> statement-breakpoint
+ALTER TABLE "project_document_file" ADD CONSTRAINT "project_document_file_compressed_content_check" CHECK ("project_document_file"."compressed_at" IS NULL OR "project_document_file"."content_type" <> 'application/pdf');--> statement-breakpoint
+ALTER TABLE "project_document_file" ADD CONSTRAINT "project_document_file_original_cleanup_check" CHECK ("project_document_file"."object_deleted_at" IS NULL OR "project_document_file"."deleted_at" IS NOT NULL OR "project_document_file"."compressed_at" IS NOT NULL);

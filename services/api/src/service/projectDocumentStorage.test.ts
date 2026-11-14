@@ -32,10 +32,12 @@ import {
 } from "@/shared-backend/schema.js";
 import {
     accessProjectDocument,
+    cleanupProjectDocumentStorage,
     deleteProjectDocument,
     uploadProjectDocument,
 } from "./projectDocument.js";
 import { normalizeProjectDocumentUploadFile } from "./projectDocumentFile.js";
+import { PROJECT_DOCUMENT_MAX_URL_EXPIRY_SECONDS } from "./projectDocumentPolicy.js";
 import {
     backfillProjectDocumentRepresentations,
     cleanupProjectDocumentRepresentations,
@@ -217,6 +219,16 @@ describe("project document representation lifecycle", () => {
         await db
             .update(projectDocumentRepresentationTable)
             .set({ deletedAt: new Date() });
+        const files = await db
+            .update(projectDocumentFileTable)
+            .set({ compressedAt: null, objectDeletedAt: null })
+            .returning();
+        for (const file of files) {
+            objects.set(file.objectKey, {
+                buffer: normalizeProjectDocumentUploadFile(input).buffer,
+                encoding: undefined,
+            });
+        }
     }
 
     async function access({
@@ -240,7 +252,7 @@ describe("project document representation lifecycle", () => {
         });
     }
 
-    it("publishes identity and compressed objects once, preserving the security policy and logical size", async () => {
+    it("publishes only gzip and Brotli, preserving the security policy and logical size", async () => {
         const { document } = await upload();
         const files = await db.select().from(projectDocumentFileTable);
         const file = first(files);
@@ -255,9 +267,10 @@ describe("project document representation lifecycle", () => {
             normalizeProjectDocumentUploadFile(input).buffer.length,
         );
         expect(file.htmlScriptsEnabled).toBe(true);
-        expect(objects.get(file.objectKey)?.buffer).toEqual(
-            normalizeProjectDocumentUploadFile(input).buffer,
-        );
+        expect(objects.has(file.objectKey)).toBe(false);
+        expect(objects.size).toBe(2);
+        expect(file.compressedAt).not.toBeNull();
+        expect(file.objectDeletedAt).not.toBeNull();
         expect(document.participantFile.byteSize).toBe(file.byteSize);
         const response = await access({ documentId: document.documentId });
         const brotli = first(
@@ -268,7 +281,90 @@ describe("project document representation lifecycle", () => {
         );
         expect(response.htmlScriptsEnabled).toBe(true);
         expect(objects.get(brotli.objectKey)?.encoding).toBe("br");
-        expect(mocks.upload).toHaveBeenCalledTimes(3);
+        expect(mocks.upload).toHaveBeenCalledTimes(2);
+        expect(
+            mocks.upload.mock.calls.every(
+                ([request]) => request.contentEncoding !== undefined,
+            ),
+        ).toBe(true);
+    });
+
+    it("stores both encoded copies even for a tiny text file, with no original", async () => {
+        const { document } = await uploadProjectDocument({
+            db,
+            metadata: {
+                ...metadata,
+                localizations: [
+                    {
+                        languageCode: "en",
+                        name: "Note",
+                        downloadFileName: "note.txt",
+                    },
+                ],
+            },
+            participantFile: {
+                originalFileName: "note.txt",
+                reportedContentType: "text/plain",
+                buffer: Buffer.from("hello"),
+            },
+            ownerFile: undefined,
+            createdByUserId: ownerId,
+        });
+        const file = first(await db.select().from(projectDocumentFileTable));
+        expect(document.participantFile.byteSize).toBe(5);
+        expect(objects.has(file.objectKey)).toBe(false);
+        expect(objects.size).toBe(2);
+        expect(
+            new Set([...objects.values()].map(({ encoding }) => encoding)),
+        ).toEqual(new Set(["br", "gzip"]));
+    });
+
+    it("keeps PDFs as one unencoded object", async () => {
+        const buffer = Buffer.from("%PDF-1.4\nfixture\n%%EOF");
+        const { document } = await uploadProjectDocument({
+            db,
+            metadata: {
+                ...metadata,
+                localizations: [
+                    {
+                        languageCode: "en",
+                        name: "PDF report",
+                        downloadFileName: "report.pdf",
+                    },
+                ],
+            },
+            participantFile: {
+                originalFileName: "report.pdf",
+                reportedContentType: "application/pdf",
+                buffer,
+            },
+            ownerFile: undefined,
+            createdByUserId: ownerId,
+        });
+        const file = first(await db.select().from(projectDocumentFileTable));
+        expect(file.compressedAt).toBeNull();
+        expect(objects.get(file.objectKey)).toEqual({
+            buffer,
+            encoding: undefined,
+        });
+        expect(objects.size).toBe(1);
+        expect(
+            await db.select().from(projectDocumentRepresentationTable),
+        ).toEqual([]);
+        const grant = await accessProjectDocument({
+            db,
+            request: {
+                projectSlug: metadata.projectSlug,
+                documentId: document.documentId,
+                audience: "participant",
+                mode: "download",
+                languageCode: "en",
+            },
+            authorization: { type: "public" },
+            acceptedEncodings: ["gzip", "identity"],
+        });
+        expect(grant.url).toBe(`https://documents.example/${file.objectKey}`);
+        expect(grant.htmlScriptsEnabled).toBe(false);
     });
 
     it("issues 100 concurrent grants without recompression, body downloads, or additional S3 uploads", async () => {
@@ -286,9 +382,8 @@ describe("project document representation lifecycle", () => {
         expect(mocks.download).not.toHaveBeenCalled();
     });
 
-    it("selects gzip/identity fallbacks and never signs an excluded encoding", async () => {
+    it("falls back to gzip, including without an Accept-Encoding header, and never signs identity", async () => {
         const { document } = await upload();
-        const file = first(await db.select().from(projectDocumentFileTable));
         const gzip = first(
             await db
                 .select()
@@ -305,13 +400,34 @@ describe("project document representation lifecycle", () => {
         ).toBe(`https://documents.example/${gzip.objectKey}`);
         expect(
             (
-                await access({
-                    documentId: document.documentId,
-                    encodings: ["identity"],
+                await accessProjectDocument({
+                    db,
+                    request: {
+                        projectSlug: metadata.projectSlug,
+                        documentId: document.documentId,
+                        audience: "participant",
+                        mode: "inline",
+                        languageCode: "en",
+                    },
+                    authorization: { type: "public" },
                 })
             ).url,
-        ).toBe(`https://documents.example/${file.objectKey}`);
+        ).toBe(`https://documents.example/${gzip.objectKey}`);
+        expect(
+            (
+                await access({
+                    documentId: document.documentId,
+                    encodings: ["identity", "gzip", "br"],
+                })
+            ).url,
+        ).toBe(`https://documents.example/${gzip.objectKey}`);
         mocks.sign.mockClear();
+        await expect(
+            access({
+                documentId: document.documentId,
+                encodings: ["identity"],
+            }),
+        ).rejects.toMatchObject({ statusCode: 406 });
         await expect(
             access({ documentId: document.documentId, encodings: [] }),
         ).rejects.toMatchObject({ statusCode: 406 });
@@ -320,19 +436,19 @@ describe("project document representation lifecycle", () => {
 
     it("does not expose pending or deleted representations", async () => {
         const { document } = await upload();
-        const file = first(await db.select().from(projectDocumentFileTable));
         await db
             .update(projectDocumentRepresentationTable)
             .set({ status: "pending" });
-        expect((await access({ documentId: document.documentId })).url).toBe(
-            `https://documents.example/${file.objectKey}`,
-        );
+        await expect(
+            access({ documentId: document.documentId }),
+        ).rejects.toMatchObject({ statusCode: 406 });
         await db
             .update(projectDocumentRepresentationTable)
             .set({ status: "available", deletedAt: new Date() });
-        expect((await access({ documentId: document.documentId })).url).toBe(
-            `https://documents.example/${file.objectKey}`,
-        );
+        await expect(
+            access({ documentId: document.documentId }),
+        ).rejects.toMatchObject({ statusCode: 406 });
+        expect(mocks.sign).not.toHaveBeenCalled();
     });
 
     it("rechecks project and audience authorization even when compressed objects exist", async () => {
@@ -472,7 +588,7 @@ describe("project document representation lifecycle", () => {
         expect(mocks.upload).toHaveBeenCalledTimes(2);
     });
 
-    it("cleans every representation and identity on document deletion", async () => {
+    it("cleans both representations without deleting a nonexistent original on document deletion", async () => {
         const { document } = await upload();
         await deleteProjectDocument({
             db,
@@ -480,6 +596,7 @@ describe("project document representation lifecycle", () => {
             documentId: document.documentId,
         });
         expect(objects.size).toBe(0);
+        expect(mocks.delete).toHaveBeenCalledTimes(2);
         const representations = await db
             .select()
             .from(projectDocumentRepresentationTable);
@@ -580,7 +697,7 @@ describe("project document representation lifecycle", () => {
         ).toBe(true);
         expect(
             first(await db.select().from(projectDocumentFileTable))
-                .compressionSkippedAt,
+                .compressedAt,
         ).toBeNull();
         expect(objects.size).toBe(1);
     });
@@ -648,7 +765,7 @@ describe("project document representation lifecycle", () => {
         expect(mocks.upload).toHaveBeenCalledOnce();
         expect(
             first(await db.select().from(projectDocumentFileTable))
-                .compressionSkippedAt,
+                .compressedAt,
         ).toBeNull();
     });
 
@@ -739,7 +856,8 @@ describe("project document representation lifecycle", () => {
         expect(rows.every((row) => row.objectDeletedAt !== null)).toBe(true);
     });
 
-    it("marks incompressible files complete so they do not starve later backfill batches", async () => {
+    it("prepares both encodings even for incompressible files and advances later backfill batches", async () => {
+        await upload();
         await upload();
         await resetCompression();
         await cleanupProjectDocumentRepresentations({
@@ -749,6 +867,12 @@ describe("project document representation lifecycle", () => {
             documentId: undefined,
         });
         const buffer = randomBytes(8192);
+        const firstFile = first(
+            await db
+                .select()
+                .from(projectDocumentFileTable)
+                .orderBy(projectDocumentFileTable.id),
+        );
         const file = first(
             await db
                 .update(projectDocumentFileTable)
@@ -757,6 +881,7 @@ describe("project document representation lifecycle", () => {
                     contentType: "text/plain",
                     htmlScriptsEnabled: false,
                 })
+                .where(eq(projectDocumentFileTable.id, firstFile.id))
                 .returning(),
         );
         objects.set(file.objectKey, { buffer, encoding: undefined });
@@ -770,23 +895,25 @@ describe("project document representation lifecycle", () => {
         };
         expect(await backfillProjectDocumentRepresentations(args)).toEqual({
             selected: 1,
-            prepared: 0,
+            prepared: 1,
         });
         expect(
-            first(await db.select().from(projectDocumentFileTable))
-                .compressionSkippedAt,
+            first(
+                await db
+                    .select()
+                    .from(projectDocumentFileTable)
+                    .where(eq(projectDocumentFileTable.id, file.id)),
+            ).compressedAt,
         ).not.toBeNull();
-        expect(await backfillProjectDocumentRepresentations(args)).toEqual({
-            selected: 0,
-            prepared: 0,
-        });
-        await upload();
-        await db
-            .update(projectDocumentRepresentationTable)
-            .set({ deletedAt: new Date() });
         expect(await backfillProjectDocumentRepresentations(args)).toEqual({
             selected: 1,
             prepared: 1,
+        });
+        const files = await db.select().from(projectDocumentFileTable);
+        expect(files.every((row) => row.compressedAt !== null)).toBe(true);
+        expect(await backfillProjectDocumentRepresentations(args)).toEqual({
+            selected: 0,
+            prepared: 0,
         });
     });
 
@@ -834,6 +961,120 @@ describe("project document representation lifecycle", () => {
         expect(mocks.upload).not.toHaveBeenCalled();
     });
 
+    it("retires legacy originals only after old grants expire, without deleting the live document", async () => {
+        const { document } = await upload();
+        await resetCompression();
+        await cleanupProjectDocumentRepresentations({
+            db,
+            storage,
+            projectSlug: undefined,
+            documentId: undefined,
+        });
+        const file = first(await db.select().from(projectDocumentFileTable));
+        expect(
+            (
+                await access({
+                    documentId: document.documentId,
+                    encodings: ["identity"],
+                })
+            ).url,
+        ).toBe(`https://documents.example/${file.objectKey}`);
+        const legacySigningDate = mocks.sign.mock.calls.at(-1)?.[0].signingDate;
+        const args = {
+            db,
+            storage,
+            projectSlug: metadata.projectSlug,
+            documentId: document.documentId,
+            apply: true,
+            limit: 100,
+        };
+        expect(await backfillProjectDocumentRepresentations(args)).toEqual({
+            selected: 1,
+            prepared: 1,
+        });
+        const converted = first(
+            await db.select().from(projectDocumentFileTable),
+        );
+        expect(legacySigningDate).toBeInstanceOf(Date);
+        if (legacySigningDate === undefined || converted.compressedAt === null)
+            throw new Error("Missing cutover timestamps");
+        expect(legacySigningDate.getTime()).toBeLessThanOrEqual(
+            converted.compressedAt.getTime(),
+        );
+        expect(
+            (await access({ documentId: document.documentId })).url,
+        ).not.toBe(`https://documents.example/${file.objectKey}`);
+        await expect(
+            access({
+                documentId: document.documentId,
+                encodings: ["identity"],
+            }),
+        ).rejects.toMatchObject({ statusCode: 406 });
+        mocks.delete.mockClear();
+        await cleanupProjectDocumentStorage({ db });
+        expect(mocks.delete).not.toHaveBeenCalled();
+        expect(objects.has(file.objectKey)).toBe(true);
+        const expiredAt =
+            converted.compressedAt.getTime() +
+            PROJECT_DOCUMENT_MAX_URL_EXPIRY_SECONDS * 1000 +
+            1000;
+        vi.spyOn(Date, "now").mockReturnValue(expiredAt);
+        await cleanupProjectDocumentStorage({ db });
+        expect(mocks.delete).toHaveBeenCalledExactlyOnceWith({
+            s3Key: file.objectKey,
+            bucketName: storage.bucketName,
+            region: storage.region,
+        });
+        expect(objects.has(file.objectKey)).toBe(false);
+        expect(objects.size).toBe(2);
+        const cleaned = first(await db.select().from(projectDocumentFileTable));
+        expect(cleaned.deletedAt).toBeNull();
+        expect(cleaned.objectDeletedAt).not.toBeNull();
+        expect(
+            (await access({ documentId: document.documentId })).url,
+        ).toContain("/representations/");
+    });
+
+    it("retries a failed legacy-original deletion without hiding either compressed copy", async () => {
+        const { document } = await upload();
+        await resetCompression();
+        await cleanupProjectDocumentRepresentations({
+            db,
+            storage,
+            projectSlug: undefined,
+            documentId: undefined,
+        });
+        const file = first(await db.select().from(projectDocumentFileTable));
+        await backfillProjectDocumentRepresentations({
+            db,
+            storage,
+            projectSlug: metadata.projectSlug,
+            documentId: document.documentId,
+            apply: true,
+            limit: 100,
+        });
+        vi.spyOn(Date, "now").mockReturnValue(
+            Date.now() + (PROJECT_DOCUMENT_MAX_URL_EXPIRY_SECONDS + 60) * 1000,
+        );
+        mocks.delete.mockRejectedValueOnce(
+            new Error("Simulated identity deletion failure"),
+        );
+        await cleanupProjectDocumentStorage({ db });
+        const retry = first(await db.select().from(projectDocumentFileTable));
+        expect(retry.deletedAt).toBeNull();
+        expect(retry.objectDeletedAt).toBeNull();
+        expect(objects.has(file.objectKey)).toBe(true);
+        expect(
+            (await access({ documentId: document.documentId })).url,
+        ).toContain("/representations/");
+        await cleanupProjectDocumentStorage({ db });
+        expect(objects.size).toBe(2);
+        expect(
+            first(await db.select().from(projectDocumentFileTable))
+                .objectDeletedAt,
+        ).not.toBeNull();
+    });
+
     it("leaves existing files readable if compressed publication fails", async () => {
         const { document } = await upload();
         await resetCompression();
@@ -855,27 +1096,79 @@ describe("project document representation lifecycle", () => {
         expect(objects.has(file.objectKey)).toBe(true);
     });
 
-    it("does not publish a new document when a compressed object upload fails", async () => {
-        const originalUpload = mocks.upload.getMockImplementation();
-        mocks.upload.mockImplementation(async (request) => {
-            if (request.contentEncoding !== undefined)
-                throw new Error("Simulated storage outage");
-            await originalUpload?.(request);
-        });
-        await expect(upload()).rejects.toThrow("Simulated storage outage");
-        const document = first(await db.select().from(projectDocumentTable));
-        expect(document.publishedAt).toBeNull();
-        expect(document.deletedAt).not.toBeNull();
-        expect(objects.size).toBe(0);
-        const representations = await db
-            .select()
-            .from(projectDocumentRepresentationTable);
+    it("preserves a committed cutover when the database acknowledgement is lost", async () => {
+        const { document } = await upload();
+        await resetCompression();
+        const file = first(await db.select().from(projectDocumentFileTable));
+        type Transaction = Parameters<
+            Parameters<PostgresJsDatabase["transaction"]>[0]
+        >[0];
+        const originalTransaction = db.transaction.bind(db);
+        let completed = 0;
+        vi.spyOn(db, "transaction").mockImplementation(
+            async <T>(callback: (tx: Transaction) => Promise<T>) => {
+                const result = await originalTransaction(callback);
+                completed += 1;
+                if (completed === 2)
+                    throw new Error("Simulated lost COMMIT acknowledgement");
+                return result;
+            },
+        );
         expect(
-            representations.every(
-                (row) => row.deletedAt !== null && row.objectDeletedAt !== null,
-            ),
-        ).toBe(true);
+            await publishProjectDocumentRepresentations({
+                db,
+                file,
+                storage,
+                buffer: normalizeProjectDocumentUploadFile(input).buffer,
+            }),
+        ).toBe(2);
+        expect(
+            (await access({ documentId: document.documentId })).url,
+        ).toContain("/representations/");
+        const rows = await db
+            .select()
+            .from(projectDocumentRepresentationTable)
+            .where(isNull(projectDocumentRepresentationTable.deletedAt));
+        expect(rows).toHaveLength(2);
+        expect(rows.every((row) => row.status === "available")).toBe(true);
     });
+
+    it.each(["br", "gzip"])(
+        "does not publish a new document when its %s upload fails",
+        async (failedEncoding) => {
+            mocks.upload.mockImplementation(
+                ({ s3Key, buffer, contentEncoding }) => {
+                    if (contentEncoding === failedEncoding)
+                        return Promise.reject(
+                            new Error("Simulated storage outage"),
+                        );
+                    objects.set(s3Key, { buffer, encoding: contentEncoding });
+                    return Promise.resolve();
+                },
+            );
+            await expect(upload()).rejects.toThrow("Simulated storage outage");
+            const document = first(
+                await db.select().from(projectDocumentTable),
+            );
+            expect(document.publishedAt).toBeNull();
+            expect(document.deletedAt).not.toBeNull();
+            expect(objects.size).toBe(0);
+            expect(
+                mocks.upload.mock.calls.every(
+                    ([request]) => request.contentEncoding !== undefined,
+                ),
+            ).toBe(true);
+            const representations = await db
+                .select()
+                .from(projectDocumentRepresentationTable);
+            expect(
+                representations.every(
+                    (row) =>
+                        row.deletedAt !== null && row.objectDeletedAt !== null,
+                ),
+            ).toBe(true);
+        },
+    );
 
     it("enforces positive sizes and one active representation per encoding in the database", async () => {
         await upload();

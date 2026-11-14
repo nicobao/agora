@@ -88,7 +88,7 @@ describe("project document access route", () => {
         expect(service.access).toHaveBeenCalledExactlyOnceWith({
             request: request("participant"),
             authorization: { type: "public" },
-            acceptedEncodings: ["identity"],
+            acceptedEncodings: ["gzip", "identity"],
         });
     });
 
@@ -112,7 +112,7 @@ describe("project document access route", () => {
         expect(service.access).toHaveBeenCalledExactlyOnceWith({
             request: request("owner"),
             authorization: { type: "facilitator", userId: USER_ID },
-            acceptedEncodings: ["identity"],
+            acceptedEncodings: ["gzip", "identity"],
         });
     });
 

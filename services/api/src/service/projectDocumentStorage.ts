@@ -3,7 +3,6 @@ import {
     and,
     asc,
     eq,
-    gte,
     inArray,
     isNull,
     isNotNull,
@@ -25,6 +24,10 @@ import {
     compressProjectDocument,
     type CompressedProjectDocument,
 } from "./projectDocumentCompression.js";
+import {
+    PROJECT_DOCUMENT_UPLOAD_TIMEOUT_MS,
+    STALE_PENDING_UPLOAD_AGE_MS,
+} from "./projectDocumentPolicy.js";
 import { deleteFromS3, downloadFromS3, uploadToS3 } from "./s3.js";
 
 export interface ProjectDocumentStorage {
@@ -32,8 +35,6 @@ export interface ProjectDocumentStorage {
     region: string;
 }
 
-export const STALE_PENDING_UPLOAD_AGE_MS = 60 * 60 * 1000;
-const uploadTimeoutMs = 120_000;
 const storageLimit = pLimit(5);
 
 async function lockActiveFile({
@@ -45,7 +46,9 @@ async function lockActiveFile({
 }) {
     const rows = await db
         .select({
-            compressionSkippedAt: projectDocumentFileTable.compressionSkippedAt,
+            compressedAt: projectDocumentFileTable.compressedAt,
+            status: projectDocumentFileTable.status,
+            objectDeletedAt: projectDocumentFileTable.objectDeletedAt,
         })
         .from(projectDocumentFileTable)
         .innerJoin(
@@ -59,7 +62,6 @@ async function lockActiveFile({
             and(
                 eq(projectDocumentFileTable.id, fileId),
                 isNull(projectDocumentFileTable.deletedAt),
-                isNull(projectDocumentFileTable.objectDeletedAt),
                 isNull(projectDocumentTable.deletedAt),
             ),
         )
@@ -71,8 +73,8 @@ async function lockActiveFile({
 }
 
 /**
- * Identity remains the rollback/download source. Derivatives are published
- * together, and existing published files remain readable during backfills.
+ * Publish gzip and Brotli together. New uploads never store an identity object;
+ * legacy files keep serving identity until this transaction switches delivery.
  */
 export async function publishProjectDocumentRepresentations({
     db,
@@ -92,10 +94,11 @@ export async function publishProjectDocumentRepresentations({
         buffer,
         contentType: file.contentType,
     });
+    if (compressed.length === 0) return 0;
     // One deadline covers reservation waits and every PUT, not just each upload.
     // Expired publishers must stop well before stale-pending cleanup can run.
-    const deadlineMs = Date.now() + uploadTimeoutMs;
-    const abortSignal = AbortSignal.timeout(uploadTimeoutMs);
+    const deadlineMs = Date.now() + PROJECT_DOCUMENT_UPLOAD_TIMEOUT_MS;
+    const abortSignal = AbortSignal.timeout(PROJECT_DOCUMENT_UPLOAD_TIMEOUT_MS);
     function checkDeadline(): void {
         abortSignal.throwIfAborted();
         // Timers may not have fired yet when a suspended process resumes.
@@ -108,7 +111,7 @@ export async function publishProjectDocumentRepresentations({
     const reserved = await db.transaction(async (tx) => {
         const active = await lockActiveFile({ db: tx, fileId: file.id });
         checkDeadline();
-        if (active.compressionSkippedAt !== null) return [];
+        if (active.compressedAt !== null) return [];
         const existing = await tx
             .select({ id: projectDocumentRepresentationTable.id })
             .from(projectDocumentRepresentationTable)
@@ -121,13 +124,6 @@ export async function publishProjectDocumentRepresentations({
             .limit(1);
         // A concurrent publisher owns the pending set, or this file is prepared.
         if (existing.length > 0) return [];
-        if (compressed.length === 0) {
-            await tx
-                .update(projectDocumentFileTable)
-                .set({ compressionSkippedAt: new Date() })
-                .where(eq(projectDocumentFileTable.id, file.id));
-            return [];
-        }
         const uploads: (CompressedProjectDocument &
             Pick<
                 typeof projectDocumentRepresentationTable.$inferSelect,
@@ -168,7 +164,7 @@ export async function publishProjectDocumentRepresentations({
             });
         }
         await db.transaction(async (tx) => {
-            await lockActiveFile({ db: tx, fileId: file.id });
+            const active = await lockActiveFile({ db: tx, fileId: file.id });
             checkDeadline();
             const published = await tx
                 .update(projectDocumentRepresentationTable)
@@ -191,18 +187,68 @@ export async function publishProjectDocumentRepresentations({
                 throw httpErrors.conflict(
                     "Document representation publication was cancelled",
                 );
+            const now = new Date();
+            await tx
+                .update(projectDocumentFileTable)
+                .set({
+                    compressedAt: now,
+                    // Pending files are new uploads: no identity object was created.
+                    objectDeletedAt:
+                        active.status === "pending"
+                            ? now
+                            : active.objectDeletedAt,
+                })
+                .where(eq(projectDocumentFileTable.id, file.id));
         });
         return reserved.length;
     } catch (error) {
-        await db
-            .update(projectDocumentRepresentationTable)
-            .set({ status: "failed", deletedAt: new Date() })
-            .where(
-                and(
-                    inArray(projectDocumentRepresentationTable.id, ids),
-                    isNull(projectDocumentRepresentationTable.objectDeletedAt),
-                ),
-            );
+        const committed = await db.transaction(async (tx) => {
+            const files = await tx
+                .select({
+                    compressedAt: projectDocumentFileTable.compressedAt,
+                    deletedAt: projectDocumentFileTable.deletedAt,
+                })
+                .from(projectDocumentFileTable)
+                .where(eq(projectDocumentFileTable.id, file.id))
+                .for("update");
+            const current = files.at(0);
+            if (current?.deletedAt === null && current.compressedAt !== null) {
+                const available = await tx
+                    .select({ id: projectDocumentRepresentationTable.id })
+                    .from(projectDocumentRepresentationTable)
+                    .where(
+                        and(
+                            inArray(projectDocumentRepresentationTable.id, ids),
+                            eq(
+                                projectDocumentRepresentationTable.status,
+                                "available",
+                            ),
+                            isNull(
+                                projectDocumentRepresentationTable.deletedAt,
+                            ),
+                            isNull(
+                                projectDocumentRepresentationTable.objectDeletedAt,
+                            ),
+                        ),
+                    );
+                // A COMMIT can succeed even if its acknowledgement is lost.
+                // Never invalidate the only live copies after a successful cutover.
+                if (available.length === reserved.length) return true;
+            }
+            await tx
+                .update(projectDocumentRepresentationTable)
+                .set({ status: "failed", deletedAt: new Date() })
+                .where(
+                    and(
+                        inArray(projectDocumentRepresentationTable.id, ids),
+                        isNull(
+                            projectDocumentRepresentationTable.objectDeletedAt,
+                        ),
+                    ),
+                );
+            return false;
+        });
+        if (committed) return reserved.length;
         throw error;
     }
 }
@@ -369,9 +415,8 @@ export async function backfillProjectDocumentRepresentations({
                 isNull(projectDocumentTable.deletedAt),
                 isNull(projectDocumentFileTable.deletedAt),
                 eq(projectDocumentFileTable.status, "available"),
-                isNull(projectDocumentFileTable.compressionSkippedAt),
+                isNull(projectDocumentFileTable.compressedAt),
                 ne(projectDocumentFileTable.contentType, "application/pdf"),
-                gte(projectDocumentFileTable.byteSize, 1024),
                 documentId === undefined
                     ? undefined
                     : eq(projectDocumentTable.publicId, documentId),

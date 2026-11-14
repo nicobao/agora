@@ -1573,6 +1573,7 @@ export const projectDocumentFileTable = pgTable(
         status: projectDocumentFileStatusEnum("status")
             .notNull()
             .default("pending"),
+        // PDF/legacy identity-object key; a prefix only for compressed-only uploads.
         objectKey: text("object_key").notNull().unique(),
         originalFileName: text("original_file_name").notNull(),
         contentType: projectDocumentContentTypeEnum("content_type").notNull(),
@@ -1580,8 +1581,8 @@ export const projectDocumentFileTable = pgTable(
             .notNull()
             .default(false),
         byteSize: integer("byte_size").notNull(),
-        // Avoid retrying files for which neither encoding reduces the size.
-        compressionSkippedAt: timestamp("compression_skipped_at", {
+        // Cutover to gzip/Brotli delivery; no new grants may use the identity object.
+        compressedAt: timestamp("compressed_at", {
             mode: "date",
             precision: 0,
         }),
@@ -1611,6 +1612,11 @@ export const projectDocumentFileTable = pgTable(
             .where(
                 sql`${table.status} = 'pending' AND ${table.deletedAt} IS NULL`,
             ),
+        index("project_document_file_original_retirement_idx")
+            .on(table.compressedAt)
+            .where(
+                sql`${table.compressedAt} IS NOT NULL AND ${table.deletedAt} IS NULL AND ${table.objectDeletedAt} IS NULL`,
+            ),
         check(
             "project_document_file_byte_size_check",
             sql`${table.byteSize} > 0 AND ${table.byteSize} <= ${sql.raw(String(MAX_PROJECT_DOCUMENT_FILE_SIZE))}`,
@@ -1618,6 +1624,14 @@ export const projectDocumentFileTable = pgTable(
         check(
             "project_document_file_html_scripts_check",
             sql`NOT ${table.htmlScriptsEnabled} OR ${table.contentType} = 'text/html'`,
+        ),
+        check(
+            "project_document_file_compressed_content_check",
+            sql`${table.compressedAt} IS NULL OR ${table.contentType} <> 'application/pdf'`,
+        ),
+        check(
+            "project_document_file_original_cleanup_check",
+            sql`${table.objectDeletedAt} IS NULL OR ${table.deletedAt} IS NOT NULL OR ${table.compressedAt} IS NOT NULL`,
         ),
     ],
 );

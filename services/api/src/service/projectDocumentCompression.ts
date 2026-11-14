@@ -29,7 +29,7 @@ export async function compressProjectDocument({
     buffer: Buffer;
     contentType: ProjectDocumentContentType;
 }): Promise<CompressedProjectDocument[]> {
-    if (contentType === "application/pdf" || buffer.length < 1024) return [];
+    if (contentType === "application/pdf") return [];
     return await compressionLimit(async () => {
         const representations: CompressedProjectDocument[] = [];
         for (const encoding of [
@@ -42,15 +42,13 @@ export async function compressProjectDocument({
                           params: { [constants.BROTLI_PARAM_QUALITY]: 6 },
                       })
                     : await compressGzip(buffer);
-            if (compressed.length < buffer.length) {
-                representations.push({
-                    encoding,
-                    buffer: compressed,
-                    checksumSha256: createHash("sha256")
-                        .update(compressed)
-                        .digest("base64"),
-                });
-            }
+            representations.push({
+                encoding,
+                buffer: compressed,
+                checksumSha256: createHash("sha256")
+                    .update(compressed)
+                    .digest("base64"),
+            });
         }
         return representations;
     });
@@ -64,7 +62,9 @@ export async function compressProjectDocument({
 export function preferredProjectDocumentEncodings(
     header: string | undefined,
 ): ProjectDocumentEncoding[] {
-    if (header === undefined || header.trim() === "") return ["identity"];
+    // An absent header accepts any coding (RFC 9110); prefer the gzip baseline.
+    if (header === undefined) return ["gzip", "identity"];
+    if (header.trim() === "") return ["identity"];
     const qualities = new Map<string, number>();
     for (const member of header.split(",")) {
         const parsed =

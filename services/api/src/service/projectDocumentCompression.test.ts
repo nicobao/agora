@@ -39,25 +39,32 @@ describe("project document HTTP representations", () => {
         }
     });
 
-    it("does not compress PDFs, tiny documents, or expand incompressible data", async () => {
+    it("keeps PDFs unencoded but always prepares both encodings for text documents", async () => {
         expect(
             await compressProjectDocument({
                 buffer: Buffer.alloc(5000, 1),
                 contentType: "application/pdf",
             }),
         ).toEqual([]);
-        expect(
-            await compressProjectDocument({
-                buffer: Buffer.from("small"),
+        for (const buffer of [Buffer.from("small"), randomBytes(8192)]) {
+            const representations = await compressProjectDocument({
+                buffer,
                 contentType: "text/plain",
-            }),
-        ).toEqual([]);
-        expect(
-            await compressProjectDocument({
-                buffer: randomBytes(8192),
-                contentType: "text/plain",
-            }),
-        ).toEqual([]);
+            });
+            expect(representations.map(({ encoding }) => encoding)).toEqual([
+                "br",
+                "gzip",
+            ]);
+            for (const representation of representations) {
+                const decoded =
+                    representation.encoding === "br"
+                        ? await promisify(brotliDecompress)(
+                              representation.buffer,
+                          )
+                        : await promisify(gunzip)(representation.buffer);
+                expect(decoded).toEqual(buffer);
+            }
+        }
     });
 
     it("handles concurrent publication without changing representation bytes", async () => {
@@ -78,7 +85,7 @@ describe("project document HTTP representations", () => {
 
 describe("document content-coding preferences", () => {
     it.each([
-        { header: undefined, expected: ["identity"] },
+        { header: undefined, expected: ["gzip", "identity"] },
         { header: "", expected: ["identity"] },
         { header: "gzip, deflate, br", expected: ["br", "gzip", "identity"] },
         { header: "gzip", expected: ["gzip", "identity"] },

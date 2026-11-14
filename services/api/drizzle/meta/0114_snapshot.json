@@ -1,5 +1,5 @@
 {
-  "id": "26497918-40ee-462a-ba41-6185154d354f",
+  "id": "63c27ccd-da77-47d9-ba75-17912122a683",
   "prevId": "5b3cb197-ce82-4417-a448-276aac83bbe6",
   "version": "7",
   "dialect": "postgresql",
@@ -13887,8 +13887,8 @@
           "primaryKey": false,
           "notNull": true
         },
-        "compression_skipped_at": {
-          "name": "compression_skipped_at",
+        "compressed_at": {
+          "name": "compressed_at",
           "type": "timestamp (0)",
           "primaryKey": false,
           "notNull": false
@@ -13973,6 +13973,22 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "project_document_file_original_retirement_idx": {
+          "name": "project_document_file_original_retirement_idx",
+          "columns": [
+            {
+              "expression": "compressed_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"project_document_file\".\"compressed_at\" IS NOT NULL AND \"project_document_file\".\"deleted_at\" IS NULL AND \"project_document_file\".\"object_deleted_at\" IS NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -14009,6 +14025,14 @@
         "project_document_file_html_scripts_check": {
           "name": "project_document_file_html_scripts_check",
           "value": "NOT \"project_document_file\".\"html_scripts_enabled\" OR \"project_document_file\".\"content_type\" = 'text/html'"
+        },
+        "project_document_file_compressed_content_check": {
+          "name": "project_document_file_compressed_content_check",
+          "value": "\"project_document_file\".\"compressed_at\" IS NULL OR \"project_document_file\".\"content_type\" <> 'application/pdf'"
+        },
+        "project_document_file_original_cleanup_check": {
+          "name": "project_document_file_original_cleanup_check",
+          "value": "\"project_document_file\".\"object_deleted_at\" IS NULL OR \"project_document_file\".\"deleted_at\" IS NOT NULL OR \"project_document_file\".\"compressed_at\" IS NOT NULL"
         }
       },
       "isRLSEnabled": false

@@ -1,9 +1,20 @@
 import { httpErrors } from "@fastify/sensible";
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, inArray, isNotNull, isNull, lt, or } from "drizzle-orm";
+import {
+    and,
+    asc,
+    desc,
+    eq,
+    inArray,
+    isNotNull,
+    isNull,
+    lt,
+    or,
+} from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import pLimit from "p-limit";
 import { config, log } from "@/app.js";
+import { logApiError } from "@/logging/privacy.js";
 import {
     projectDocumentFileTable,
     projectDocumentLocalizationTable,
@@ -34,8 +45,12 @@ import type { ProjectDocumentEncoding } from "./projectDocumentCompression.js";
 import {
     cleanupProjectDocumentRepresentations,
     publishProjectDocumentRepresentations,
-    STALE_PENDING_UPLOAD_AGE_MS,
 } from "./projectDocumentStorage.js";
+import {
+    PROJECT_DOCUMENT_MAX_URL_EXPIRY_SECONDS,
+    PROJECT_DOCUMENT_UPLOAD_TIMEOUT_MS,
+    STALE_PENDING_UPLOAD_AGE_MS,
+} from "./projectDocumentPolicy.js";
 import {
     buildProjectDocumentContentDisposition,
     normalizeProjectDocumentLocalizations,
@@ -332,15 +347,21 @@ export async function uploadProjectDocument({
     const publishedAt = new Date();
     try {
         for (const upload of persistedDocument.objectUploads) {
-            await uploadToS3({
-                s3Key: upload.objectKey,
-                buffer: upload.file.buffer,
-                bucketName,
-                contentType: upload.file.contentType,
-                checksumSha256: upload.file.checksumSha256,
-                region,
-            });
-            await publishProjectDocumentRepresentations({
+            if (upload.file.contentType === "application/pdf") {
+                await uploadToS3({
+                    s3Key: upload.objectKey,
+                    buffer: upload.file.buffer,
+                    bucketName,
+                    contentType: upload.file.contentType,
+                    checksumSha256: upload.file.checksumSha256,
+                    region,
+                    abortSignal: AbortSignal.timeout(
+                        PROJECT_DOCUMENT_UPLOAD_TIMEOUT_MS,
+                    ),
+                });
+                continue;
+            }
+            const published = await publishProjectDocumentRepresentations({
                 db,
                 file: {
                     id: upload.fileId,
@@ -350,6 +371,10 @@ export async function uploadProjectDocument({
                 storage: { bucketName, region },
                 buffer: upload.file.buffer,
             });
+            if (published !== 2)
+                throw httpErrors.conflict(
+                    "Project document compression was cancelled",
+                );
         }
         const wasPublished = await db.transaction(async (tx) => {
             const activeProjects = await tx
@@ -416,7 +441,7 @@ export async function uploadProjectDocument({
                     .where(eq(projectDocumentTable.id, persistedDocument.id));
                 await tx
                     .update(projectDocumentFileTable)
-                    .set({ deletedAt, objectDeletedAt: null })
+                    .set({ deletedAt })
                     .where(
                         eq(
                             projectDocumentFileTable.projectDocumentId,
@@ -561,6 +586,11 @@ export async function cleanupProjectDocumentStorage({
     const stalePendingUploadCutoff = new Date(
         Date.now() - STALE_PENDING_UPLOAD_AGE_MS,
     );
+    // Preserve every pre-conversion URL, including URLs issued under an older
+    // configuration with the maximum permitted seven-day lifetime.
+    const legacyOriginalCutoff = new Date(
+        Date.now() - PROJECT_DOCUMENT_MAX_URL_EXPIRY_SECONDS * 1000,
+    );
     const fileRows = await db.transaction(async (tx) => {
         const staleDocumentRows = await tx
             .select({
@@ -687,17 +717,32 @@ export async function cleanupProjectDocumentStorage({
             )
             .where(
                 and(
-                    isNotNull(projectDocumentFileTable.deletedAt),
                     isNull(projectDocumentFileTable.objectDeletedAt),
-                    includeRecentPending
-                        ? undefined
-                        : or(
-                              eq(projectDocumentFileTable.status, "available"),
-                              lt(
-                                  projectDocumentFileTable.createdAt,
-                                  stalePendingUploadCutoff,
-                              ),
-                          ),
+                    or(
+                        and(
+                            isNotNull(projectDocumentFileTable.deletedAt),
+                            includeRecentPending
+                                ? undefined
+                                : or(
+                                      eq(
+                                          projectDocumentFileTable.status,
+                                          "available",
+                                      ),
+                                      lt(
+                                          projectDocumentFileTable.createdAt,
+                                          stalePendingUploadCutoff,
+                                      ),
+                                  ),
+                        ),
+                        and(
+                            isNull(projectDocumentFileTable.deletedAt),
+                            eq(projectDocumentFileTable.status, "available"),
+                            lt(
+                                projectDocumentFileTable.compressedAt,
+                                legacyOriginalCutoff,
+                            ),
+                        ),
+                    ),
                     projectSlug === undefined
                         ? undefined
                         : eq(projectTable.slug, projectSlug),
@@ -705,7 +750,9 @@ export async function cleanupProjectDocumentStorage({
                         ? undefined
                         : eq(projectDocumentTable.publicId, documentId),
                 ),
-            );
+            )
+            .orderBy(asc(projectDocumentFileTable.id))
+            .limit(100);
     });
     const limit = pLimit(5);
     await Promise.all(
@@ -720,13 +767,15 @@ export async function cleanupProjectDocumentStorage({
                     const now = new Date();
                     await db
                         .update(projectDocumentFileTable)
-                        .set({ deletedAt: now, objectDeletedAt: now })
+                        .set({ objectDeletedAt: now })
                         .where(eq(projectDocumentFileTable.id, file.fileId));
                 } catch (error: unknown) {
-                    log.error(
+                    logApiError({
+                        logger: log,
+                        level: "error",
+                        event: { event: "application_error" },
                         error,
-                        `[ProjectDocument] Failed to delete ${file.objectKey}; cleanup will retry`,
-                    );
+                    });
                 }
             }),
         ),
@@ -904,7 +953,7 @@ export async function accessProjectDocument({
     db,
     request,
     authorization,
-    acceptedEncodings = ["identity"],
+    acceptedEncodings = ["gzip", "identity"],
 }: {
     db: PostgresJsDatabase;
     request: AccessProjectDocumentRequest;
@@ -960,6 +1009,8 @@ export async function accessProjectDocument({
                 objectKey: projectDocumentFileTable.objectKey,
                 contentType: projectDocumentFileTable.contentType,
                 htmlScriptsEnabled: projectDocumentFileTable.htmlScriptsEnabled,
+                compressedAt: projectDocumentFileTable.compressedAt,
+                objectDeletedAt: projectDocumentFileTable.objectDeletedAt,
             })
             .from(projectDocumentFileTable)
             .where(
@@ -969,40 +1020,47 @@ export async function accessProjectDocument({
                     isNull(projectDocumentFileTable.deletedAt),
                     eq(projectDocumentFileTable.audience, request.audience),
                 ),
-            );
+            )
+            .for("share");
         const selectedFile = fileRows.at(0);
         if (selectedFile === undefined) {
             throw httpErrors.notFound("Project document file not found");
         }
-        const representations = acceptedEncodings.some(
-            (encoding) => encoding !== "identity",
-        )
-            ? await tx
-                  .select({
-                      encoding: projectDocumentRepresentationTable.encoding,
-                      objectKey: projectDocumentRepresentationTable.objectKey,
-                  })
-                  .from(projectDocumentRepresentationTable)
-                  .where(
-                      and(
-                          eq(
-                              projectDocumentRepresentationTable.fileId,
-                              selectedFile.id,
+        const representations =
+            selectedFile.compressedAt !== null
+                ? await tx
+                      .select({
+                          encoding: projectDocumentRepresentationTable.encoding,
+                          objectKey:
+                              projectDocumentRepresentationTable.objectKey,
+                      })
+                      .from(projectDocumentRepresentationTable)
+                      .where(
+                          and(
+                              eq(
+                                  projectDocumentRepresentationTable.fileId,
+                                  selectedFile.id,
+                              ),
+                              eq(
+                                  projectDocumentRepresentationTable.status,
+                                  "available",
+                              ),
+                              isNull(
+                                  projectDocumentRepresentationTable.deletedAt,
+                              ),
+                              isNull(
+                                  projectDocumentRepresentationTable.objectDeletedAt,
+                              ),
                           ),
-                          eq(
-                              projectDocumentRepresentationTable.status,
-                              "available",
-                          ),
-                          isNull(projectDocumentRepresentationTable.deletedAt),
-                          isNull(
-                              projectDocumentRepresentationTable.objectDeletedAt,
-                          ),
-                      ),
-                  )
-            : [];
+                      )
+                : [];
         const selectedObjectKey = acceptedEncodings
             .map((encoding) => {
-                if (encoding === "identity") return selectedFile.objectKey;
+                if (encoding === "identity")
+                    return selectedFile.compressedAt === null &&
+                        selectedFile.objectDeletedAt === null
+                        ? selectedFile.objectKey
+                        : undefined;
                 return representations.find(
                     (candidate) => candidate.encoding === encoding,
                 )?.objectKey;
@@ -1062,6 +1120,9 @@ export async function accessProjectDocument({
         return {
             selectedFile,
             selectedObjectKey,
+            // Capture under the file lock so legacy URLs cannot outlive the
+            // retention window measured from the later compression cutover.
+            signingDate: new Date(Math.floor(Date.now() / 1000) * 1000),
             downloadFileName: getProjectDocumentDownloadFileName({
                 fileName: downloadFileName,
                 audience: selectedFile.audience,
@@ -1084,6 +1145,7 @@ export async function accessProjectDocument({
             access.selectedFile.audience === "owner"
                 ? "private, no-store"
                 : undefined,
+        signingDate: access.signingDate,
     });
     return {
         ...signedUrl,

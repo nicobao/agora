@@ -246,7 +246,7 @@ describe("project document version authorization", () => {
     it("applies the generated compression migration without changing existing files or script permissions", async () => {
         const migration = readFileSync(
             new URL(
-                "../database/flyway/V0115__marvelous_reavers.sql",
+                "../database/flyway/V0115__equal_golden_guardian.sql",
                 import.meta.url,
             ),
             "utf8",
@@ -254,7 +254,7 @@ describe("project document version authorization", () => {
         expect(migration).toBe(
             readFileSync(
                 new URL(
-                    "../drizzle/0114_marvelous_reavers.sql",
+                    "../drizzle/0114_equal_golden_guardian.sql",
                     import.meta.url,
                 ),
                 "utf8",
@@ -266,7 +266,7 @@ describe("project document version authorization", () => {
             await tx.execute(sql`DROP TABLE project_document_representation;
                 DROP TYPE project_document_encoding;
                 DROP TYPE project_document_representation_status;
-                ALTER TABLE project_document_file DROP COLUMN compression_skipped_at`);
+                ALTER TABLE project_document_file DROP COLUMN compressed_at`);
             await tx.execute(sql.raw(migration));
             expect(await tx.select().from(projectDocumentFileTable)).toEqual(
                 before,
@@ -287,9 +287,18 @@ describe("project document version authorization", () => {
                 checksumSha256: "test-checksum",
                 status: "available",
             } satisfies typeof projectDocumentRepresentationTable.$inferInsert;
+            await tx.insert(projectDocumentRepresentationTable).values([
+                representation,
+                {
+                    ...representation,
+                    encoding: "gzip",
+                    objectKey: "migrated/participant/gzip",
+                },
+            ]);
             await tx
-                .insert(projectDocumentRepresentationTable)
-                .values(representation);
+                .update(projectDocumentFileTable)
+                .set({ compressedAt: new Date() })
+                .where(eq(projectDocumentFileTable.id, file.id));
             const grant = await accessProjectDocument({
                 db: tx,
                 request: request({ audience: "participant" }),
@@ -342,15 +351,35 @@ describe("project document version authorization", () => {
                     }),
                 ).rejects.toMatchObject({ cause: { code } });
             }
+            await expect(
+                tx.transaction(async (savepoint) => {
+                    await savepoint
+                        .update(projectDocumentFileTable)
+                        .set({
+                            contentType: "application/pdf",
+                            htmlScriptsEnabled: false,
+                        })
+                        .where(eq(projectDocumentFileTable.id, file.id));
+                }),
+            ).rejects.toMatchObject({ cause: { code: "23514" } });
+            await expect(
+                tx.transaction(async (savepoint) => {
+                    await savepoint
+                        .update(projectDocumentFileTable)
+                        .set({
+                            compressedAt: null,
+                            objectDeletedAt: new Date(),
+                        })
+                        .where(eq(projectDocumentFileTable.id, file.id));
+                }),
+            ).rejects.toMatchObject({ cause: { code: "23514" } });
             await tx
                 .update(projectDocumentRepresentationTable)
                 .set({ deletedAt: new Date() });
-            await tx
-                .insert(projectDocumentRepresentationTable)
-                .values({
-                    ...representation,
-                    objectKey: "migrated/participant/replacement/br",
-                });
+            await tx.insert(projectDocumentRepresentationTable).values({
+                ...representation,
+                objectKey: "migrated/participant/replacement/br",
+            });
         });
     });
 

@@ -117,6 +117,7 @@ export async function generatePresignedUrl({
     responseContentType,
     responseContentDisposition,
     responseCacheControl,
+    signingDate = new Date(),
 }: {
     s3Key: string;
     bucketName: string;
@@ -125,6 +126,7 @@ export async function generatePresignedUrl({
     responseContentType?: string;
     responseContentDisposition?: string;
     responseCacheControl?: string;
+    signingDate?: Date;
 }): Promise<{ url: string; expiresAt: Date }> {
     const command = new GetObjectCommand({
         Bucket: bucketName,
@@ -136,8 +138,9 @@ export async function generatePresignedUrl({
 
     const url = await getSignedUrl(getS3Client({ region }), command, {
         expiresIn,
+        signingDate,
     });
-    const expiresAt = new Date(Date.now() + expiresIn * 1000);
+    const expiresAt = new Date(signingDate.getTime() + expiresIn * 1000);
 
     return { url, expiresAt };
 }
